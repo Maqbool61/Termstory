@@ -63,6 +63,9 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commands_session_id ON commands(session_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_date_range ON sessions(start_time DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_commands_date_range ON commands(timestamp DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project_date ON sessions(project_id, start_time);")
         
         conn.commit()
         conn.close()
@@ -293,6 +296,167 @@ class Database:
             """, (p_id,))
             s_count, t_time = cursor.fetchone()
             
+            projects.append(Project(
+                id=p_id,
+                name=name,
+                path=path,
+                first_seen=first,
+                last_seen=last,
+                session_count=s_count or 0,
+                total_time=t_time or 0
+            ))
+            
+        conn.close()
+        return projects
+
+    def get_range_sessions(self, start_ts: int, end_ts: int) -> List[Session]:
+        """Get sessions starting in the given Unix timestamp range"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, start_time, end_time, duration_seconds, project_id
+            FROM sessions
+            WHERE start_time >= ? AND start_time <= ?
+            ORDER BY start_time ASC
+        """, (start_ts, end_ts))
+        session_rows = cursor.fetchall()
+        
+        sessions = []
+        for row in session_rows:
+            s_id, start, end, duration, p_id = row
+            
+            cursor.execute("""
+                SELECT id, timestamp, command, exit_code, session_id, project_id
+                FROM commands
+                WHERE session_id = ?
+                ORDER BY timestamp ASC
+            """, (s_id,))
+            cmd_rows = cursor.fetchall()
+            
+            commands = []
+            for c_row in cmd_rows:
+                c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                commands.append(Command(
+                    id=c_id,
+                    timestamp=timestamp,
+                    command=command_text,
+                    exit_code=exit_code,
+                    session_id=s_id,
+                    project_id=cmd_p_id
+                ))
+                
+            sessions.append(Session(
+                id=s_id,
+                start_time=start,
+                end_time=end,
+                duration_seconds=duration,
+                project_id=p_id,
+                commands=commands
+            ))
+            
+        conn.close()
+        return sessions
+
+    def get_project_sessions(self, project_id: int, start_ts: int) -> List[Session]:
+        """Get sessions for a specific project starting after the start_ts timestamp"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, start_time, end_time, duration_seconds, project_id
+            FROM sessions
+            WHERE project_id = ? AND start_time >= ?
+            ORDER BY start_time ASC
+        """, (project_id, start_ts))
+        session_rows = cursor.fetchall()
+        
+        sessions = []
+        for row in session_rows:
+            s_id, start, end, duration, p_id = row
+            
+            cursor.execute("""
+                SELECT id, timestamp, command, exit_code, session_id, project_id
+                FROM commands
+                WHERE session_id = ?
+                ORDER BY timestamp ASC
+            """, (s_id,))
+            cmd_rows = cursor.fetchall()
+            
+            commands = []
+            for c_row in cmd_rows:
+                c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                commands.append(Command(
+                    id=c_id,
+                    timestamp=timestamp,
+                    command=command_text,
+                    exit_code=exit_code,
+                    session_id=s_id,
+                    project_id=cmd_p_id
+                ))
+                
+            sessions.append(Session(
+                id=s_id,
+                start_time=start,
+                end_time=end,
+                duration_seconds=duration,
+                project_id=p_id,
+                commands=commands
+            ))
+            
+        conn.close()
+        return sessions
+
+    def get_all_projects_with_stats(self) -> List[Project]:
+        """Get all projects from database, joining with sessions to aggregate statistics"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT p.id, p.name, p.path, p.first_seen, p.last_seen,
+                   COUNT(s.id) AS session_count,
+                   SUM(s.duration_seconds) AS total_time
+            FROM projects p
+            LEFT JOIN sessions s ON p.id = s.project_id
+            GROUP BY p.id
+        """)
+        
+        rows = cursor.fetchall()
+        projects = []
+        for row in rows:
+            p_id, name, path, first, last, s_count, t_time = row
+            projects.append(Project(
+                id=p_id,
+                name=name,
+                path=path,
+                first_seen=first,
+                last_seen=last,
+                session_count=s_count or 0,
+                total_time=t_time or 0
+            ))
+            
+        conn.close()
+        return projects
+
+    def search_projects(self, query: str) -> List[Project]:
+        """Fuzzy search projects by name or path using case-insensitive LIKE matches"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT p.id, p.name, p.path, p.first_seen, p.last_seen,
+                   COUNT(s.id) AS session_count,
+                   SUM(s.duration_seconds) AS total_time
+            FROM projects p
+            LEFT JOIN sessions s ON p.id = s.project_id
+            WHERE p.name LIKE ? OR p.path LIKE ?
+            GROUP BY p.id
+        """, (f"%{query}%", f"%{query}%"))
+        
+        rows = cursor.fetchall()
+        projects = []
+        for row in rows:
+            p_id, name, path, first, last, s_count, t_time = row
             projects.append(Project(
                 id=p_id,
                 name=name,

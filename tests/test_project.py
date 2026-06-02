@@ -1,5 +1,5 @@
-from termstory.models import Command, Session
-from termstory.project import detect_projects, extract_cd_path, humanize_project_name
+from termstory.models import Command, Session, Project
+from termstory.project import detect_projects, extract_cd_path, humanize_project_name, disambiguate_project_names
 
 def test_extract_cd_path():
     assert extract_cd_path("cd ~/projects/incubator-hugegraph") == "~/projects/incubator-hugegraph"
@@ -14,6 +14,22 @@ def test_humanize_project_name():
     assert humanize_project_name("~") == "Home"
     assert humanize_project_name("/") == "Home"
     assert humanize_project_name("/some/nested/directory-name_here") == "Directory Name Here"
+    
+    # New V2 rules
+    assert humanize_project_name("learning-k8s") == "Kubernetes"
+    assert humanize_project_name("test-tf-cli") == "Terraform CLI"
+    assert humanize_project_name("my-sqlite-db") == "Sqlite Database"
+
+def test_disambiguate_project_names():
+    p1 = Project(id=1, name="HugeGraph", path="/home/user/projects/hugegraph", first_seen=0, last_seen=0, session_count=1, total_time=1)
+    p2 = Project(id=2, name="HugeGraph", path="/home/user/personal/hugegraph", first_seen=0, last_seen=0, session_count=1, total_time=1)
+    p3 = Project(id=3, name="Other", path="/home/user/projects/other", first_seen=0, last_seen=0, session_count=1, total_time=1)
+    
+    names = disambiguate_project_names([p1, p2, p3])
+    
+    assert names[1] == "HugeGraph (/home/user/projects)"
+    assert names[2] == "HugeGraph (/home/user/personal)"
+    assert names[3] == "Other" # Unchanged as it's unique
 
 def test_detect_projects():
     # Session 1: working in project A

@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List, Optional
+from typing import List, Optional, Dict
 from termstory.models import Session, Project
 
 import shlex
@@ -42,16 +42,23 @@ def humanize_project_name(path: str) -> str:
     word_replacements = {
         "hugegraph": "HugeGraph",
         "incubator": "Apache",
+        "k8s": "Kubernetes",
+        "tf": "Terraform",
+        "db": "Database",
+        "cli": "CLI",
     }
     
+    prefixes_to_strip = {"my", "project", "learning", "test"}
+    
     words = name.split()
+    while words and words[0].lower() in prefixes_to_strip:
+        words.pop(0)
+        
     processed_words = []
     for word in words:
         word_lower = word.lower()
         if word_lower in word_replacements:
             processed_words.append(word_replacements[word_lower])
-        elif word_lower == "my":
-            continue
         else:
             # Capitalize first letter
             processed_words.append(word.capitalize())
@@ -60,6 +67,28 @@ def humanize_project_name(path: str) -> str:
         return base_name.capitalize()
         
     return " ".join(processed_words)
+
+def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
+    """Return a mapping of project_id -> display_name. If name clashes exist, 
+    appends the abbreviated parent directory path hint."""
+    from collections import defaultdict
+    by_name = defaultdict(list)
+    for p in projects:
+        if p.id is not None:
+            by_name[p.name].append(p)
+            
+    display_names = {}
+    for name, projs in by_name.items():
+        if len(projs) == 1:
+            display_names[projs[0].id] = projs[0].name
+        else:
+            for p in projs:
+                parent_dir = os.path.dirname(p.path)
+                home = os.path.expanduser("~")
+                if parent_dir.startswith(home):
+                    parent_dir = parent_dir.replace(home, "~", 1)
+                display_names[p.id] = f"{p.name} ({parent_dir})"
+    return display_names
 
 def detect_projects(sessions: List[Session]) -> List[Project]:
     """Detect projects from cd commands in sessions, humanize names, and update links in sessions/commands"""
