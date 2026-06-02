@@ -145,46 +145,93 @@ class HistoryTree(Tree):
         project_map = {p.id: p for p in projects if p.id is not None}
         display_names = disambiguate_project_names(projects)
         
-        # Group sessions by calendar day
-        sessions_by_day = defaultdict(list)
-        for s in sessions:
-            day_key = datetime.fromtimestamp(s.start_time).strftime("%b %d, %Y")
-            sessions_by_day[day_key].append(s)
-            
-        # Sort days reverse-chronologically
-        sorted_days = sorted(sessions_by_day.keys(), key=lambda d: datetime.strptime(d, "%b %d, %Y"), reverse=True)
-        
-        for day in sorted_days:
-            day_sessions = sessions_by_day[day]
-            matched_sessions = []
-            
-            for s in day_sessions:
+        # Pre-filter sessions if a search query is active
+        if search_query:
+            q = search_query.lower()
+            filtered_sessions = []
+            for s in sessions:
                 proj = project_map.get(s.project_id)
                 proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
                 if proj_name == "General / No Project":
                     proj_name = "Other"
-                
                 memory = get_session_memory_str(s)
+                cmd_match = any(q in cmd.command.lower() for cmd in s.commands)
+                commit_match = any(q in (c.get("message", "") + " " + c.get("cleaned_message", "")).lower() for c in s.commits)
+                if q in proj_name.lower() or q in memory.lower() or cmd_match or commit_match:
+                    filtered_sessions.append(s)
+            sessions_to_build = filtered_sessions
+        else:
+            sessions_to_build = sessions
+            
+        # Group sessions hierarchically: Month -> Date -> Project -> List of sessions
+        # nested[month_key][day_key][project_id] = [sessions]
+        nested = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+        for s in sessions_to_build:
+            dt = datetime.fromtimestamp(s.start_time)
+            month_key = dt.strftime("%B %Y")
+            day_key = dt.strftime("%Y-%m-%d")
+            nested[month_key][day_key][s.project_id].append(s)
+            
+        # Sort Months chronologically (newest first)
+        def parse_month_key(m_key: str) -> Tuple[int, int]:
+            dt_parsed = datetime.strptime(m_key, "%B %Y")
+            return (dt_parsed.year, dt_parsed.month)
+            
+        sorted_months = sorted(nested.keys(), key=parse_month_key, reverse=True)
+        
+        # Helper to sort project IDs alphabetically with "Other" last
+        def project_sort_key(p_id):
+            if p_id is None:
+                return (1, "other")
+            p_obj = project_map.get(p_id)
+            p_name = display_names.get(p_id, "Other") if p_obj else "Other"
+            if p_name == "General / No Project":
+                p_name = "Other"
+            return (0, p_name.lower())
+            
+        for m_key in sorted_months:
+            month_dt = datetime.strptime(m_key, "%B %Y")
+            month_node = self.root.add(
+                m_key,
+                data={"type": "month", "year": month_dt.year, "month": month_dt.month},
+                expand=True
+            )
+            
+            sorted_days = sorted(nested[m_key].keys(), reverse=True)
+            for day_key in sorted_days:
+                day_dt = datetime.strptime(day_key, "%Y-%m-%d")
+                # Format: "Jun 03 (Wed)"
+                day_label = day_dt.strftime("%b %d (%a)")
+                day_node = month_node.add(
+                    day_label,
+                    data={"type": "date", "date_str": day_key},
+                    expand=True
+                )
                 
-                # Check if matches query
-                if search_query:
-                    q = search_query.lower()
-                    cmd_match = any(q in cmd.command.lower() for cmd in s.commands)
-                    commit_match = any(q in (c.get("message", "") + " " + c.get("cleaned_message", "")).lower() for c in s.commits)
-                    if q in proj_name.lower() or q in memory.lower() or cmd_match or commit_match:
-                        matched_sessions.append((proj, proj_name, s, memory))
-                else:
-                    matched_sessions.append((proj, proj_name, s, memory))
+                sorted_project_ids = sorted(nested[m_key][day_key].keys(), key=project_sort_key)
+                for p_id in sorted_project_ids:
+                    proj = project_map.get(p_id)
+                    proj_name = display_names.get(p_id, "Other") if proj else "Other"
+                    if proj_name == "General / No Project":
+                        proj_name = "Other"
+                        
+                    proj_node = day_node.add(
+                        proj_name,
+                        data={"type": "project", "project_id": p_id, "date_str": day_key},
+                        expand=False
+                    )
                     
-            if not matched_sessions:
-                continue
-                
-            day_node = self.root.add(day, expand=True)
-            for proj, proj_name, s, memory in matched_sessions:
-                start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
-                end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
-                display_label = f"✨ [bold cyan]{proj_name}[/] ➔ {memory} [dim]({start_str} - {end_str})[/]"
-                day_node.add_leaf(display_label, data=(proj, s))
+                    sorted_sessions = sorted(nested[m_key][day_key][p_id], key=lambda x: x.start_time)
+                    for s in sorted_sessions:
+                        memory = get_session_memory_str(s)
+                        start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
+                        end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
+                        
+                        session_label = f"✨ {memory} [dim]({start_str} - {end_str})[/]"
+                        proj_node.add_leaf(
+                            session_label,
+                            data={"type": "session", "project_id": p_id, "session_id": s.id}
+                        )
 
 
 def make_stacked_bar(project_seconds: Dict[str, int], total_seconds: int, width: int = 40) -> Tuple[str, str]:
@@ -380,7 +427,7 @@ class TermStoryWorkspace(App):
         layout: grid;
         grid-size: 2 2;
         grid-rows: auto 1fr;
-        grid-columns: 35% 65%;
+        grid-columns: 30% 70%;
         height: 100%;
     }
     #stats-panel {
@@ -450,9 +497,26 @@ class TermStoryWorkspace(App):
         tree = self.query_one("#history-navigator")
         tree.populate(self.projects, self.sessions)
         
-        # Setup initial view as overall dashboard summary
-        self.query_one("#details-canvas").render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
-        tree.focus()
+        # Automatically focus today's date node or the most recent date node
+        today_str = get_current_time().strftime("%Y-%m-%d")
+        all_date_nodes = []
+        target_node = None
+        
+        for m_node in tree.root.children:
+            m_node.expand()
+            for d_node in m_node.children:
+                all_date_nodes.append(d_node)
+                if d_node.data and d_node.data.get("date_str") == today_str:
+                    target_node = d_node
+                    
+        if not target_node and all_date_nodes:
+            target_node = all_date_nodes[0]
+            
+        if target_node:
+            tree.select_node(target_node)
+        else:
+            self.query_one("#details-canvas").render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
+            tree.focus()
         
     def action_quit_app(self) -> None:
         self.exit()
@@ -485,19 +549,46 @@ class TermStoryWorkspace(App):
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
         node_data = event.node.data
         canvas = self.query_one("#details-canvas")
-        if node_data:
-            project, session = node_data
-            canvas.render_session_details(project, session)
-        else:
-            node_label = str(event.node.label)
-            # Filter sessions matching this date
-            day_sessions = []
-            for s in self.sessions:
-                s_date = datetime.fromtimestamp(s.start_time).strftime("%b %d, %Y")
-                if s_date == node_label:
-                    day_sessions.append(s)
+        if not node_data:
+            canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
+            return
             
-            if day_sessions:
-                canvas.render_time_summary(f"📅 Daily Overview ({node_label})", day_sessions, self.projects)
+        node_type = node_data.get("type")
+        if node_type == "month":
+            year = node_data["year"]
+            month = node_data["month"]
+            matched = [s for s in self.sessions if datetime.fromtimestamp(s.start_time).year == year and datetime.fromtimestamp(s.start_time).month == month]
+            month_name = datetime(year, month, 1).strftime("%B %Y")
+            canvas.render_time_summary(f"📅 Monthly Overview ({month_name})", matched, self.projects)
+            
+        elif node_type == "date":
+            date_str = node_data["date_str"]
+            matched = [s for s in self.sessions if datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") == date_str]
+            day_dt = datetime.strptime(date_str, "%Y-%m-%d")
+            day_label = day_dt.strftime("%b %d (%a)")
+            canvas.render_time_summary(f"📅 Daily Overview ({day_label})", matched, self.projects)
+            
+        elif node_type == "project":
+            project_id = node_data["project_id"]
+            date_str = node_data["date_str"]
+            matched = [s for s in self.sessions if datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") == date_str and s.project_id == project_id]
+            
+            project_map = {p.id: p for p in self.projects if p.id is not None}
+            proj = project_map.get(project_id)
+            proj_name = proj.name if proj else "Other"
+            if proj_name == "General / No Project":
+                proj_name = "Other"
+            day_dt = datetime.strptime(date_str, "%Y-%m-%d")
+            day_label = day_dt.strftime("%b %d (%a)")
+            canvas.render_time_summary(f"📁 {proj_name} on {day_label}", matched, self.projects)
+            
+        elif node_type == "session":
+            session_id = node_data["session_id"]
+            project_id = node_data["project_id"]
+            session = next((s for s in self.sessions if s.id == session_id), None)
+            project_map = {p.id: p for p in self.projects if p.id is not None}
+            proj = project_map.get(project_id)
+            if session:
+                canvas.render_session_details(proj, session)
             else:
-                canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
+                canvas.update_view_empty()

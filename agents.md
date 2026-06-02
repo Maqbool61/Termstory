@@ -37,6 +37,12 @@ TermStory is **not** a dashboard or a reporting tool. It is a **developer memory
 - **Features**: Completely overhauled cards, empty charts, and focus score metrics into a compact, clean executive highlights list showing project active days, total duration, and main achievements.
 - **Files**: Edited `format_insights_output` and `_get_project_main_achievement` in [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py).
 
+### 💻 `termstory ui` / Interactive TUI Dashboard (COMPLETED & PUSHED)
+- **Status**: TUI Phase 1 implemented, tested, and pushed.
+- **Features**: Three-pane dashboard (StatsHeader with GitHub activity heatmap, 4-level Timeline Explorer navigator tree supporting Vim keys and regex search filtering, and DetailsCanvas displaying dynamic multi-level Time Summaries or Session Timeline Details). Auto-focuses on the current date node on startup.
+- **Files**: Created [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py) and registered subcommand in [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py).
+
+
 ---
 
 ## 3. Running Verification
