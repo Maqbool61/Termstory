@@ -187,11 +187,129 @@ class HistoryTree(Tree):
                 day_node.add_leaf(display_label, data=(proj, s))
 
 
+def make_stacked_bar(project_seconds: Dict[str, int], total_seconds: int, width: int = 40) -> Tuple[str, str]:
+    """Generate a horizontal stacked progress bar and legend using distinct project colors."""
+    if total_seconds <= 0 or not project_seconds:
+        return "[grey37]" + "░" * width + "[/]", "[dim]No active time[/]"
+        
+    sorted_projects = sorted(project_seconds.items(), key=lambda x: x[1], reverse=True)
+    colors = ["cyan", "green", "yellow", "magenta", "blue", "red", "white"]
+    project_colors = {}
+    for idx, (p_name, _) in enumerate(sorted_projects):
+        project_colors[p_name] = colors[idx % len(colors)]
+        
+    bar_str = ""
+    legend_parts = []
+    remaining_width = width
+    
+    for p_name, seconds in sorted_projects:
+        pct = seconds / total_seconds
+        char_count = int(round(pct * width))
+        if pct > 0 and char_count == 0 and remaining_width > 0:
+            char_count = 1
+        char_count = min(char_count, remaining_width)
+        remaining_width -= char_count
+        
+        color = project_colors[p_name]
+        bar_str += f"[{color}]" + "█" * char_count + "[/]"
+        
+        pct_display = int(round(pct * 100))
+        legend_parts.append(f"[{color}]■ {p_name} ({pct_display}%)[/]")
+        
+    if remaining_width > 0:
+        bar_str += "[grey37]" + "░" * remaining_width + "[/]"
+        
+    return bar_str, "  ".join(legend_parts)
+
+
 class DetailsCanvas(Static):
-    """Display Git commits, project paths, and the complete command timeline."""
+    """Display overall metrics, dynamic time distribution bar, and Git/Command details."""
     
     def update_view_empty(self) -> None:
         self.update(Text.from_markup("\n\n[dim italic]Select a session node from the explorer to view detailed logs.[/dim italic]"))
+        
+    def render_time_summary(self, title: str, sessions: List[Session], projects: List[Project]) -> None:
+        """STATE A: Time Summary View (Today/Week/Month or overall)"""
+        from rich.panel import Panel
+        
+        elements = []
+        
+        total_time_seconds = sum(s.duration_seconds for s in sessions)
+        total_time_str = format_duration(total_time_seconds)
+        
+        active_project_ids = {s.project_id for s in sessions if s.project_id is not None}
+        active_projects_count = len(active_project_ids)
+        total_commits = sum(len(s.commits) for s in sessions)
+        
+        elements.append(Text.from_markup(f"[bold white]{title}[/bold white]\n"))
+        
+        # 1. Hero Banner: Side-by-side metric cards
+        card1 = Panel(
+            Text.from_markup(f"[bold cyan]{total_time_str}[/]\n[dim]Total Time Logged[/]"),
+            border_style="bright_black",
+            padding=(0, 2),
+            expand=True
+        )
+        card2 = Panel(
+            Text.from_markup(f"[bold cyan]{active_projects_count}[/]\n[dim]Active Projects[/]"),
+            border_style="bright_black",
+            padding=(0, 2),
+            expand=True
+        )
+        card3 = Panel(
+            Text.from_markup(f"[bold cyan]{total_commits}[/]\n[dim]Git Commits[/]"),
+            border_style="bright_black",
+            padding=(0, 2),
+            expand=True
+        )
+        
+        cards_table = Table(box=None, show_header=False, padding=0, expand=True)
+        cards_table.add_column("c1", ratio=1)
+        cards_table.add_column("c2", ratio=1)
+        cards_table.add_column("c3", ratio=1)
+        cards_table.add_row(card1, card2, card3)
+        
+        elements.append(cards_table)
+        elements.append(Text("\n"))
+        
+        # 2. Time Distribution Bar
+        elements.append(Text.from_markup("[bold]Time Distribution[/bold]\n"))
+        display_names = disambiguate_project_names(projects)
+        project_seconds = defaultdict(int)
+        for s in sessions:
+            proj_name = "Other"
+            if s.project_id is not None and s.project_id in display_names:
+                proj_name = display_names[s.project_id]
+                if proj_name == "General / No Project":
+                    proj_name = "Other"
+            project_seconds[proj_name] += s.duration_seconds
+            
+        bar, legend = make_stacked_bar(project_seconds, total_time_seconds, width=60)
+        elements.append(Text.from_markup(f"{bar}\n\n{legend}\n\n"))
+        
+        # 3. Session Feed
+        elements.append(Text.from_markup("[bold]Activity Feed[/bold]\n"))
+        sorted_sessions = sorted(sessions, key=lambda s: s.start_time)
+        project_map = {p.id: p for p in projects if p.id is not None}
+        
+        for s in sorted_sessions:
+            proj = project_map.get(s.project_id)
+            proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
+            if proj_name == "General / No Project":
+                proj_name = "Other"
+                
+            dur_str = format_duration(s.duration_seconds)
+            memory = get_session_memory_str(s)
+            start_time_str = datetime.fromtimestamp(s.start_time).strftime("%I:%M %p")
+            
+            feed_item = Text()
+            feed_item.append(f"• {start_time_str} ", style="dim")
+            feed_item.append(f"{proj_name} ", style="bold cyan" if proj_name != "Other" else "bold green")
+            feed_item.append(f"({dur_str})\n", style="dim")
+            feed_item.append(f"  └─ ✨ {memory}\n", style="white")
+            elements.append(feed_item)
+            
+        self.update(Group(*elements))
         
     def render_session_details(self, project: Optional[Project], session: Session) -> None:
         elements = []
@@ -332,8 +450,8 @@ class TermStoryWorkspace(App):
         tree = self.query_one("#history-navigator")
         tree.populate(self.projects, self.sessions)
         
-        # Setup empty view on details canvas
-        self.query_one("#details-canvas").update_view_empty()
+        # Setup initial view as overall dashboard summary
+        self.query_one("#details-canvas").render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
         tree.focus()
         
     def action_quit_app(self) -> None:
@@ -371,4 +489,15 @@ class TermStoryWorkspace(App):
             project, session = node_data
             canvas.render_session_details(project, session)
         else:
-            canvas.update_view_empty()
+            node_label = str(event.node.label)
+            # Filter sessions matching this date
+            day_sessions = []
+            for s in self.sessions:
+                s_date = datetime.fromtimestamp(s.start_time).strftime("%b %d, %Y")
+                if s_date == node_label:
+                    day_sessions.append(s)
+            
+            if day_sessions:
+                canvas.render_time_summary(f"📅 Daily Overview ({node_label})", day_sessions, self.projects)
+            else:
+                canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
