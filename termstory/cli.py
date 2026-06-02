@@ -394,6 +394,23 @@ def show_insights(
     output = format_insights_output(insights_data)
     console.print(output)
 
+@app.command("ui")
+def show_ui(
+    days: int = typer.Option(30, "--days", help="Number of days of history to display"),
+    all_history: bool = typer.Option(False, "--all", help="Display all recorded history"),
+):
+    """Launch the interactive terminal dashboard user interface"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    db.init_db()
+    
+    run_ingestion(db)
+    
+    from termstory.tui import TermStoryWorkspace
+    app_tui = TermStoryWorkspace(db, days_limit=None if all_history else days)
+    app_tui.run()
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,

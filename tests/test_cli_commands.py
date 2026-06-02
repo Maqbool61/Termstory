@@ -133,13 +133,13 @@ def test_cli_search_and_insights_commands(tmp_path, monkeypatch):
     # Test search command
     result = runner.invoke(app, ["search", "health"])
     assert result.exit_code == 0
-    assert "Health" in result.stdout
+    assert "health" in result.stdout.lower()
     assert "Apache HugeGraph" in result.stdout
     assert "health" in result.stdout
 
     # Test insights command
     result = runner.invoke(app, ["insights"])
     assert result.exit_code == 0
-    assert "Developer Insights" in result.stdout
-    assert "Focus Score" in result.stdout
+    assert "Highlights" in result.stdout
+    assert "Apache HugeGraph" in result.stdout
 

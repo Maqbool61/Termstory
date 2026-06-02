@@ -101,7 +101,7 @@ def make_visual_bar(value: int, max_value: int, width: int = 15) -> str:
     return f"[bold green]{'█' * filled_len}[/][grey37]{'░' * empty_len}[/]"
 
 def format_today_output(sessions: List[Session], projects: List[Project], compare_sessions: List[Session] = None) -> str:
-    """Format today's sessions, command aggregates, and project details as a clean UI card"""
+    """Format today's sessions, command aggregates, and project details as a clean, box-free list"""
     is_override = "TERMSTORY_DATE_OVERRIDE" in os.environ
     today_str = get_current_time().strftime("%A, %B %d, %Y")
     
@@ -112,110 +112,83 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
         
     if not sessions:
         if is_override:
-            return render_to_string(Panel(f"No sessions recorded on {today_str}.", title=header_title, border_style="yellow", box=ROUNDED))
-        return render_to_string(Panel("No sessions recorded today.", title=header_title, border_style="yellow", box=ROUNDED))
+            return render_to_string(Text.from_markup(f"{header_title}\n\nNo sessions recorded on {today_str}."))
+        return render_to_string(Text.from_markup(f"{header_title}\n\nNo sessions recorded today."))
         
     display_names = disambiguate_project_names(projects)
-    project_map = {p.id: p for p in projects if p.id is not None}
     
-    sessions_by_project = defaultdict(list)
+    # Group sessions by project name
+    project_sessions = defaultdict(list)
     for s in sessions:
-        sessions_by_project[s.project_id].append(s)
+        proj_name = "Other"
+        if s.project_id is not None and s.project_id in display_names:
+            proj_name = display_names[s.project_id]
+            if proj_name == "General / No Project":
+                proj_name = "Other"
+        project_sessions[proj_name].append(s)
         
-    project_ids = list(sessions_by_project.keys())
+    sorted_projects = sorted(project_sessions.keys(), key=lambda p: (p == "Other", p.lower()))
     
-    def project_sort_key(p_id):
-        if p_id is None:
-            return (1, "")
-        p = project_map.get(p_id)
-        name = p.name if p else ""
-        return (0, name)
-        
-    project_ids.sort(key=project_sort_key)
+    output_lines = [header_title, ""]
     
-    elements = []
-    
-    for idx, p_id in enumerate(project_ids):
-        proj_sessions = sessions_by_project[p_id]
-        proj_sessions.sort(key=lambda s: s.start_time)
-        
-        proj_name = "General / No Project"
-        if p_id is not None and p_id in display_names:
-            proj_name = display_names[p_id]
-            
-        session_word = "session" if len(proj_sessions) == 1 else "sessions"
-        
+    for proj_name in sorted_projects:
+        proj_sessions = project_sessions[proj_name]
         total_time_seconds = sum(s.duration_seconds for s in proj_sessions)
         
+        # Calculate yesterday comparison if compare_sessions is provided
         compare_str = ""
         if compare_sessions is not None:
-            yesterday_seconds = sum(s.duration_seconds for s in compare_sessions if s.project_id == p_id)
+            yesterday_seconds = 0
+            p_ids_for_name = [pid for pid, name in display_names.items() if name == proj_name or (proj_name == "Other" and name == "General / No Project")]
+            yesterday_seconds = sum(
+                s.duration_seconds for s in compare_sessions
+                if (s.project_id in p_ids_for_name) or (proj_name == "Other" and s.project_id is None)
+            )
             diff = total_time_seconds - yesterday_seconds
             sign = "+" if diff >= 0 else "-"
             diff_color = "green" if diff >= 0 else "red"
-            compare_str = f" ([{diff_color}]{sign}{format_duration(abs(diff))}[/] vs yesterday)"
+            compare_str = f", [{diff_color}]{sign}{format_duration(abs(diff))} vs yesterday[/]"
             
-        proj_header = [
-            f"📁 Project: [bold cyan]{proj_name}[/] ([dim]{len(proj_sessions)} {session_word}[/])",
-            f"⏱️  Total Time: [bold green]{format_duration(total_time_seconds)}[/]{compare_str}"
-        ]
+        proj_header = f"[bold cyan]{proj_name}[/] [dim]({format_duration(total_time_seconds)}{compare_str})[/]"
+        output_lines.append(proj_header)
+        output_lines.append("[dim]────────────────────[/]")
         
-        project_group_items = [Text.from_markup("\n".join(proj_header))]
-        
-        # Commands Breakdown
-        cmd_counts = Counter()
-        for s in proj_sessions:
-            for cmd in s.commands:
-                category = classify_command(cmd.command)
-                cmd_counts[category] += 1
-                
-        if cmd_counts:
-            cmd_table = Table(box=None, show_header=False, padding=(0, 2))
-            max_count = max(cmd_counts.values()) if cmd_counts else 0
-            for category, count in cmd_counts.most_common(5):
-                display_cat = DISPLAY_NAMES.get(category, category)
-                bar = make_visual_bar(count, max_count, width=15)
-                cmd_table.add_row(f"  {display_cat}", bar, f"[bold]{count}[/] times")
-                
-            project_group_items.append(Text("\n📝 Commands:"))
-            project_group_items.append(cmd_table)
-            
-        # Commits
-        proj_commits = []
-        seen_hashes = set()
-        for s in proj_sessions:
-            for commit in s.commits:
-                if commit["hash"] not in seen_hashes:
-                    seen_hashes.add(commit["hash"])
-                    proj_commits.append(commit)
-                    
-        if proj_commits:
-            commit_lines = ["\n💬 Commits:"]
-            for c in proj_commits:
-                short_hash = c["hash"][:7]
+        # Extract memories per session
+        seen_memories = set()
+        bullet_lines = []
+        for s in sorted(proj_sessions, key=lambda x: x.start_time):
+            # 1. Commits
+            for c in s.commits:
                 msg = c["cleaned_message"] or c["message"]
-                commit_lines.append(f"  [bold yellow]•[/] [cyan]{short_hash}[/] {msg}")
-            project_group_items.append(Text.from_markup("\n".join(commit_lines)))
+                mem = f"{msg} (commit)"
+                if mem not in seen_memories:
+                    seen_memories.add(mem)
+                    bullet_lines.append(f"• {mem}")
             
-        # Sessions list
-        session_lines = ["\n📅 Sessions:"]
-        for s in proj_sessions:
-            start_str = format_time(s.start_time)
-            end_str = format_time(s.end_time)
-            dur_str = format_duration(s.duration_seconds)
-            session_lines.append(f"  [bold blue]•[/] {start_str} - {end_str} ([dim]{dur_str}[/])")
-            
-        project_group_items.append(Text.from_markup("\n".join(session_lines)))
+            # 2. Key non-noise commands if no commits
+            if not s.commits:
+                candidates = [cmd.command for cmd in s.commands if not _is_noise_command(cmd.command)]
+                if candidates:
+                    best_cmd = max(candidates, key=len)
+                    if best_cmd not in seen_memories:
+                        seen_memories.add(best_cmd)
+                        bullet_lines.append(f"• {best_cmd}")
+                else:
+                    # 3. Fallback: raw commands
+                    raw_cmds = []
+                    for cmd in s.commands:
+                        if not raw_cmds or raw_cmds[-1] != cmd.command:
+                            raw_cmds.append(cmd.command)
+                    for cmd in raw_cmds:
+                        if cmd not in seen_memories:
+                            seen_memories.add(cmd)
+                            bullet_lines.append(f"• {cmd}")
+                            
+        for line in bullet_lines:
+            output_lines.append(line)
+        output_lines.append("")
         
-        # Add to outer element list with rounded panel
-        elements.append(Panel(Group(*project_group_items), box=ROUNDED, border_style="blue"))
-        
-    outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
-        *elements
-    )
-    
-    return render_to_string(outer_group)
+    return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
 
 def format_week_output(sessions: List[Session], projects: List[Project], start_ts: int, end_ts: int) -> str:
     """Format weekly summary report, grouping project hours by days of the week"""
@@ -402,110 +375,81 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
     return render_to_string(outer_group)
 
 def format_project_output(sessions: List[Session], project: Project) -> str:
-    """Format project-specific detailed history (last 30 days dashboard)"""
-    header_title = f"📁 {project.name} (Last 30 Days)"
-    
+    """Format project-specific detailed history as a clean, box-free list"""
+    if not sessions:
+        return f"📁 Project: [bold cyan]{project.name}[/] [dim]({project.path})[/]\n\nNo activity recorded."
+
     total_time_seconds = sum(s.duration_seconds for s in sessions)
-    session_count = len(sessions)
-    unique_days = len(set(datetime.fromtimestamp(s.start_time).date() for s in sessions))
+    unique_days_set = set(datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") for s in sessions)
+    unique_days = len(unique_days_set)
     day_word = "day" if unique_days == 1 else "days"
-    
-    stats_text = f"⏱️  Total Time: [bold green]{format_duration(total_time_seconds)}[/] • [bold]{session_count}[/] sessions • [bold]{unique_days}[/] {day_word} worked"
-    
-    elements = [Text.from_markup(stats_text)]
-    
-    # 1. Group by Week (Monday of each week)
-    sessions_by_week = defaultdict(list)
+
+    header_lines = [
+        f"📁 Project: [bold cyan]{project.name}[/] [dim]({project.path})[/]",
+        f"Active: [bold]{unique_days}[/] {day_word} worked | Total: [bold green]{format_duration(total_time_seconds)}[/]",
+        ""
+    ]
+
+    # Group sessions by calendar day
+    sessions_by_day = defaultdict(list)
     for s in sessions:
-        dt = datetime.fromtimestamp(s.start_time)
-        monday = dt - timedelta(days=dt.weekday())
-        monday_start = datetime.combine(monday.date(), time.min)
-        sessions_by_week[int(monday_start.timestamp())].append(s)
-        
-    if sessions_by_week:
-        week_table = Table(box=None, show_header=False, padding=(0, 2))
-        max_week_time = max(sum(s.duration_seconds for s in ws) for ws in sessions_by_week.values()) if sessions_by_week else 0
-        sorted_weeks = sorted(list(sessions_by_week.keys()))
-        for week_ts in sorted_weeks:
-            week_sessions = sessions_by_week[week_ts]
-            week_time = sum(s.duration_seconds for s in week_sessions)
-            week_start_str = datetime.fromtimestamp(week_ts).strftime("%b %-d")
-            s_word = "session" if len(week_sessions) == 1 else "sessions"
-            bar = make_visual_bar(week_time, max_week_time, width=15)
-            week_table.add_row(f"  Week of {week_start_str}", bar, f"[dim]{format_duration(week_time)} ({len(week_sessions)} {s_word})[/]")
-            
-        elements.append(Text.from_markup("\n[bold]By Week:[/]"))
-        elements.append(week_table)
-        
-    # 2. Top Commands
-    cmd_counts = Counter()
-    all_commands = []
-    for s in sessions:
-        for cmd in s.commands:
-            category = classify_command(cmd.command)
-            cmd_counts[category] += 1
-            all_commands.append(cmd)
-            
-    if cmd_counts:
-        cmd_strs = []
-        for category, count in cmd_counts.most_common(5):
-            display_cat = DISPLAY_NAMES.get(category, category)
-            cmd_strs.append(f"[bold]{display_cat}[/] ({count})")
-        elements.append(Text.from_markup("\n[bold]Commands:[/]\n  " + " • ".join(cmd_strs)))
-        
-    # 3. Commits
-    all_commits = []
-    seen_hashes = set()
-    for s in sessions:
-        for commit in s.commits:
-            if commit["hash"] not in seen_hashes:
-                seen_hashes.add(commit["hash"])
-                all_commits.append(commit)
-                
-    if all_commits:
-        all_commits.sort(key=lambda c: c["timestamp"], reverse=True)
-        commit_lines = ["\n[bold]Recent Commits:[/]"]
-        for c in all_commits[:5]:
-            short_hash = c["hash"][:7]
-            msg = c["cleaned_message"] or c["message"]
-            commit_lines.append(f"  [bold yellow]•[/] [cyan]{short_hash}[/] {msg}")
-        elements.append(Text.from_markup("\n".join(commit_lines)))
-        
-    # 4. Recent Activity (last 5 sessions)
-    sorted_sessions = sorted(sessions, key=lambda s: s.start_time, reverse=True)
-    recent_sessions = sorted_sessions[:5]
-    if recent_sessions:
-        activity_lines = ["\n[bold]Recent Activity:[/]"]
-        for s in recent_sessions:
-            date_str = datetime.fromtimestamp(s.start_time).strftime("%b %-d")
-            start_str = format_time(s.start_time)
-            end_str = format_time(s.end_time)
-            dur_str = format_duration(s.duration_seconds)
-            
-            types = list(set(classify_command(c.command) for c in s.commands))
-            types_str = ", ".join(DISPLAY_NAMES.get(t, t) for t in types[:3])
-            act_info = f"  {date_str}, {start_str} - {end_str} ([bold green]{dur_str}[/])"
-            if types_str:
-                act_info += f" - [dim]{types_str}[/]"
-            activity_lines.append(act_info)
-        elements.append(Text.from_markup("\n".join(activity_lines)))
-        
-    # 5. Related Files
-    file_counts = extract_files_from_commands(all_commands)
-    if file_counts:
-        file_lines = ["\n[bold]Related Files:[/]"]
-        sorted_files = sorted(file_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        for fname, count in sorted_files:
-            times_word = "time" if count == 1 else "times"
-            file_lines.append(f"  [bold cyan]{fname}[/] (edited {count} {times_word})")
-        elements.append(Text.from_markup("\n".join(file_lines)))
-        
-    outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
-        Panel(Group(*elements), box=ROUNDED, border_style="blue")
-    )
-    
-    return render_to_string(outer_group)
+        day_key = datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d")
+        sessions_by_day[day_key].append(s)
+
+    # Sort days reverse-chronologically (newest first)
+    sorted_day_keys = sorted(sessions_by_day.keys(), reverse=True)
+
+    output_lines = list(header_lines)
+
+    for day_key in sorted_day_keys:
+        day_sessions = sessions_by_day[day_key]
+        # Sort sessions on this day chronologically
+        day_sessions.sort(key=lambda s: s.start_time)
+
+        # Extract unique memories for this day
+        day_memories = []
+        seen_memories = set()
+        for s in day_sessions:
+            # 1. Commits
+            for c in s.commits:
+                msg = c["cleaned_message"] or c["message"]
+                if msg not in seen_memories:
+                    seen_memories.add(msg)
+                    day_memories.append(msg)
+
+            # 2. Key non-noise commands if no commits in session
+            if not s.commits:
+                candidates = [cmd.command for cmd in s.commands if not _is_noise_command(cmd.command)]
+                if candidates:
+                    best_cmd = max(candidates, key=len)
+                    if best_cmd not in seen_memories:
+                        seen_memories.add(best_cmd)
+                        day_memories.append(best_cmd)
+                else:
+                    # 3. Fallback: raw commands
+                    raw_cmds = []
+                    for cmd in s.commands:
+                        if not raw_cmds or raw_cmds[-1] != cmd.command:
+                            raw_cmds.append(cmd.command)
+                    for cmd in raw_cmds:
+                        if cmd not in seen_memories:
+                            seen_memories.add(cmd)
+                            day_memories.append(cmd)
+
+        if not day_memories:
+            continue
+
+        # Format day memories
+        dt = datetime.strptime(day_key, "%Y-%m-%d")
+        day_str = dt.strftime("%b %d")
+
+        for idx, mem in enumerate(day_memories):
+            if idx == 0:
+                output_lines.append(f"{day_str:<8}  {mem}")
+            else:
+                output_lines.append(f"{'':<8}  {mem}")
+
+    return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
 
 def format_projects_list(projects: List[Project]) -> str:
     """Format all-time projects list card"""
@@ -618,27 +562,33 @@ _NOISE_COMMANDS_EXACT = frozenset({
 
 def _is_noise_command(cmd: str) -> bool:
     """Check if a command is low-value noise (navigation, status checks, debugging).
-    Multi-command chains (&&, ;) are never noise."""
+    Shell comments and code fences are always noise. Multi-command chains (&&, ;)
+    pass through only if they don't match other noise patterns."""
     stripped = cmd.strip()
     if not stripped:
         return True
     lower = stripped.lower()
     if lower in _NOISE_COMMANDS_EXACT:
         return True
-    # Multi-command chains are intentional work
+    # Shell comments and pasted code fences — always noise, even in chains
+    if stripped.startswith('#') or stripped.startswith('```'):
+        return True
+    # Multi-command chains are intentional work (if not caught above)
     if '&&' in stripped or '; ' in stripped:
         return False
     # Navigation
     if lower.startswith(('cd ', 'cd\t', 'ls ', 'ls\t')):
-        return True
-    # Shell comments and pasted code fences
-    if stripped.startswith('#') or stripped.startswith('```'):
         return True
     # Debugging/inspection commands (not creative work)
     if lower.startswith(('docker logs ', 'docker exec ', 'docker stop ',
                          'docker restart ')):
         return True
     if lower.startswith(('tail ', 'head ', 'cat ', 'grep ', 'wc ')):
+        return True
+    # Scripting/utility commands (not memorable milestones)
+    if lower.startswith(('sed ', 'echo ', 'find ', 'awk ', 'sort ',
+                         'ssh ', 'scp ', 'mkdir ', 'nano ', 'touch ',
+                         'rm ', 'mv ', 'cp ', 'chmod ', 'chown ')):
         return True
     return False
 
@@ -664,6 +614,10 @@ def _get_session_memory(result: Dict) -> Optional[Tuple[int, str, bool]]:
         candidates = [cmd for cmd in result["all_commands"] if not _is_noise_command(cmd)]
         if candidates:
             return (ts, max(candidates, key=len), False)
+
+    # Priority 4: Fallback to longest raw command if all else is noise (memory extraction fails)
+    if result.get("all_commands"):
+        return (ts, max(result["all_commands"], key=len), False)
 
     # Nothing meaningful in this session
     return None
@@ -703,16 +657,18 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
     else:
         date_range_str = f"{min_dt.strftime('%b %d, %Y')} → {max_dt.strftime('%b %d, %Y')}"
 
-    header_str = f"🔍 Query: [bold cyan]{query}[/] | [bold green]{format_duration(total_matched_time)}[/] total | [bold]{len(results)}[/] sessions | [dim]{date_range_str}[/]"
+    header_str = f"🔍 Search: [bold cyan]{query}[/]"
 
     if not detailed:
         # Step 1: Extract ONE memory per session, grouped by project
         project_memories = defaultdict(list)
+        project_durations = defaultdict(int)
         for r in results:
             proj_name = r["project_name"]
             if not proj_name or proj_name == "General / No Project":
                 proj_name = "Other"
-
+            
+            project_durations[proj_name] += r["duration_seconds"]
             memory = _get_session_memory(r)
             if memory:
                 project_memories[proj_name].append(memory)
@@ -722,11 +678,9 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
             project_memories[proj] = _collapse_by_day(project_memories[proj])
 
         # Step 3: Build header
-        query_title = query.capitalize()
         header_lines = [
-            f"[bold cyan]{query_title}[/]\n",
-            f"[dim]{format_duration(total_matched_time)} across {len(results)} sessions[/]",
-            f"[dim]{date_range_str}[/]\n"
+            f"🔍 Search: [bold cyan]{query}[/]",
+            ""
         ]
 
         # Sort: Other goes last
@@ -742,10 +696,10 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
             if not entries:
                 continue
 
+            proj_header = f"[bold cyan]{proj}[/] [dim]({format_duration(project_durations[proj])})[/]"
             proj_group = [
-                Text.from_markup(f"[bold]{proj}[/]"),
-                Text.from_markup("[dim]" + "─" * 20 + "[/]"),
-                Text("")
+                Text.from_markup(proj_header),
+                Text.from_markup("[dim]" + "─" * 20 + "[/]")
             ]
 
             table = Table(box=None, show_header=False, padding=0)
@@ -807,101 +761,98 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
 
     return render_to_string(Group(*group_items))
 
+def _get_project_main_achievement(sessions: List[Session]) -> Tuple[str, str]:
+    """Helper to find the single most meaningful and recent commit or key command across a project's sessions"""
+    # Sort sessions reverse-chronologically to find the most recent achievement
+    sorted_sessions = sorted(sessions, key=lambda s: s.start_time, reverse=True)
+    for s in sorted_sessions:
+        # Check commits
+        if s.commits:
+            # Get the most recent commit in this session
+            c = sorted(s.commits, key=lambda x: x["timestamp"], reverse=True)[0]
+            date_str = datetime.fromtimestamp(c["timestamp"]).strftime("%b %d")
+            return c["cleaned_message"] or c["message"], date_str
+    
+    # If no commits in any session, look for key non-noise commands
+    for s in sorted_sessions:
+        candidates = [cmd for cmd in s.commands if not _is_noise_command(cmd.command)]
+        if candidates:
+            # Pick the longest/most descriptive command from the session
+            best_cmd = max(candidates, key=lambda c: len(c.command))
+            date_str = datetime.fromtimestamp(best_cmd.timestamp).strftime("%b %d")
+            return best_cmd.command, date_str
+            
+    # If all else fails, fall back to the most recent raw command
+    for s in sorted_sessions:
+        if s.commands:
+            # Sort commands reverse-chronologically
+            sorted_cmds = sorted(s.commands, key=lambda c: c.timestamp, reverse=True)
+            if sorted_cmds:
+                cmd = sorted_cmds[0]
+                date_str = datetime.fromtimestamp(cmd.timestamp).strftime("%b %d")
+                return cmd.command, date_str
+                
+    return "No activity logged", ""
+
 def format_insights_output(insights: Dict) -> str:
-    """Format the developer work patterns insights report"""
+    """Format the developer work patterns insights report as Highlights"""
     days = insights.get("days", 30)
-    header_title = f"💡 Developer Insights & Work Patterns (Last {days} Days)"
     
-    score = insights.get("focus_score", 0.0)
-    # Focus Score Bar
-    filled_score = int(score)
-    empty_score = 10 - filled_score
-    score_bar = f"[bold green]{'█' * filled_score}[/][grey37]{'░' * empty_score}[/]"
+    from termstory.config import get_db_path
+    from termstory.database import Database
     
-    score_desc = "Standard focus"
-    if score >= 8.5:
-        score_desc = "Exceptional deep focus"
-    elif score >= 7.0:
-        score_desc = "Good focused work"
-    elif score < 4.0:
-        score_desc = "High context switching"
+    db = Database(get_db_path())
+    db.init_db()
+    
+    start_ts = int((get_current_time() - timedelta(days=days)).timestamp())
+    sessions = db.get_range_sessions(start_ts, int(get_current_time().timestamp()))
+    
+    if not sessions:
+        return f"💡 Highlights (Last {days} Days)\n\nNo activity recorded in the last {days} days."
         
-    score_panel_text = f"Focus Score: [bold green]{score} / 10.0[/] ({score_desc})\n{score_bar}"
+    # Get all projects associated with sessions
+    project_ids = list(set(s.project_id for s in sessions if s.project_id is not None))
+    projects = db.get_projects_by_ids(project_ids)
+    display_names = disambiguate_project_names(projects)
     
-    elements = [
-        Panel(Text.from_markup(score_panel_text), title="🎯 Concentration Score", border_style="green", box=ROUNDED),
-        Text("")
+    # Group sessions by project name
+    project_sessions = defaultdict(list)
+    for s in sessions:
+        proj_name = "Other"
+        if s.project_id is not None and s.project_id in display_names:
+            proj_name = display_names[s.project_id]
+            if proj_name == "General / No Project":
+                proj_name = "Other"
+        project_sessions[proj_name].append(s)
+        
+    # Sort projects by total time DESC
+    project_times = {
+        proj: sum(s.duration_seconds for s in sessions)
+        for proj, sessions in project_sessions.items()
+    }
+    sorted_projects = sorted(project_sessions.keys(), key=lambda p: project_times[p], reverse=True)
+    
+    output_lines = [
+        f"💡 Highlights (Last {days} Days)",
+        ""
     ]
     
-    # Project Time Distribution
-    time_dist = insights.get("time_dist", [])
-    if time_dist:
-        dist_table = Table(box=None, show_header=True, padding=(0, 2), title="📁 Project Focus Distribution", title_justify="left")
-        dist_table.add_column("Project", style="cyan bold")
-        dist_table.add_column("Allocation Bar")
-        dist_table.add_column("Percentage", justify="right")
-        dist_table.add_column("Total Time", justify="right")
+    for proj_name in sorted_projects:
+        proj_sessions = project_sessions[proj_name]
+        total_time = project_times[proj_name]
         
-        max_pct = max(item[1] for item in time_dist) if time_dist else 100
-        for proj, pct, dur in time_dist:
-            bar = make_visual_bar(int(pct), int(max_pct), width=15)
-            dist_table.add_row(proj, bar, f"{pct:.1f}%", format_duration(dur))
-            
-        elements.append(dist_table)
-        elements.append(Text(""))
+        # Calculate unique days worked
+        unique_days_set = set(datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") for s in proj_sessions)
+        days_worked = len(unique_days_set)
+        day_word = "day" if days_worked == 1 else "days"
         
-    # Time of Day Allocation
-    tod_dist = insights.get("tod_dist", {})
-    if tod_dist:
-        tod_table = Table(box=None, show_header=True, padding=(0, 2), title="🌅 Hourly Time-of-Day Split", title_justify="left")
-        tod_table.add_column("Time Period", style="yellow bold")
-        tod_table.add_column("Allocation Bar")
-        tod_table.add_column("Total Time", justify="right")
+        # Get main achievement
+        achievement, ach_date = _get_project_main_achievement(proj_sessions)
+        ach_suffix = f" ({ach_date})" if ach_date else ""
         
-        total_tod = sum(tod_dist.values())
-        max_tod = max(tod_dist.values()) if tod_dist else 0
-        periods = [
-            ("Morning (6 AM - 12 PM)", tod_dist.get("morning", 0)),
-            ("Afternoon (12 PM - 6 PM)", tod_dist.get("afternoon", 0)),
-            ("Evening/Night (6 PM - 6 AM)", tod_dist.get("evening", 0))
-        ]
-        for name, duration in periods:
-            bar = make_visual_bar(duration, max_tod, width=15)
-            tod_table.add_row(name, bar, format_duration(duration))
-            
-        elements.append(tod_table)
-        elements.append(Text(""))
+        output_lines.append(f"[bold cyan]{proj_name}[/] [dim]({format_duration(total_time)})[/]")
+        output_lines.append("[dim]────────────────────[/]")
+        output_lines.append(f"Active: [bold]{days_worked}[/] {day_word} | Main: {achievement}{ach_suffix}")
+        output_lines.append("")
         
-    # Day of Week Distribution
-    day_dist = insights.get("day_dist", {})
-    if day_dist:
-        day_table = Table(box=None, show_header=True, padding=(0, 2), title="📅 Day-of-Week Work Distribution", title_justify="left")
-        day_table.add_column("Day", style="blue bold")
-        day_table.add_column("Activity Bar")
-        day_table.add_column("Total Time", justify="right")
-        
-        max_day = max(day_dist.values()) if day_dist else 0
-        days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        for day in days_order:
-            duration = day_dist.get(day, 0)
-            if duration > 0:
-                bar = make_visual_bar(duration, max_day, width=15)
-                day_table.add_row(day, bar, format_duration(duration))
-                
-        elements.append(day_table)
-        elements.append(Text(""))
-        
-    # Patterns and Observations
-    patterns = insights.get("patterns", [])
-    if patterns:
-        pattern_lines = ["[bold]Observed Patterns & Insights:[/]\n"]
-        for p in patterns:
-            pattern_lines.append(f"  [bold green]✓[/] {p}")
-        elements.append(Text.from_markup("\n".join(pattern_lines)))
-        
-    outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
-        Panel(Group(*elements), box=ROUNDED, border_style="blue")
-    )
-    
-    return render_to_string(outer_group)
+    return render_to_string(Text.from_markup("\n".join(output_lines).strip()))

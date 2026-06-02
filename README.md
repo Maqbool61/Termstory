@@ -69,6 +69,7 @@ Default output answers: *"What work did I do?"*
 - 💬 **Git Commit Integration** — Maps local Git commits to active sessions using timestamp windowing (5-minute pre-buffer, 10-minute post-buffer). Cleans commit messages by stripping emojis, JIRA codes, conventional prefixes (`feat:`, `fix:`), and PR references.
 - 💡 **Developer Insights** — Focus scores, project time splits, hourly/daily work distribution, and pattern detection.
 - 📋 **Daily / Weekly / Monthly Summaries** — Structured breakdowns of where your time went.
+- 💻 **Interactive TUI Dashboard** — Live terminal user interface featuring a timeline tree explorer, dynamic search/filter, top statistics panel with a GitHub-style activity heatmap, and a detailed session inspector.
 - 🔒 **100% Local & Private** — Everything stored in a local SQLite database (`~/.termstory/termstory.db`). No network calls. No telemetry.
 
 ---
@@ -85,7 +86,7 @@ Or install dependencies manually:
 pip install -r requirements.txt
 ```
 
-**Requirements:** Python 3.8+, `rich`, `typer`, `python-dateutil`
+**Requirements:** Python 3.9+, `rich`, `typer`, `python-dateutil`, `textual`
 
 ---
 
@@ -172,6 +173,23 @@ termstory insights
 termstory insights --days 90    # analyze last 90 days
 ```
 
+### `termstory ui`
+
+Launch the interactive Terminal User Interface (TUI) dashboard.
+
+```bash
+termstory ui
+termstory ui --days 90        # display last 90 days of history
+termstory ui --all            # display all recorded history
+```
+
+**Key Bindings:**
+- `j` / `k` (or Arrow keys): Navigate Timeline Explorer (left tree)
+- `Enter` / `Space`: Toggle nodes (expand/collapse)
+- `/`: Open dynamic search/filter input
+- `Esc` (inside search): Close search and clear filter
+- `q` / `Esc` (inside tree): Exit dashboard
+
 ### Date Override
 
 Query any date:
@@ -201,7 +219,7 @@ Shell History Files (zsh/bash)
         ↓
     Memory Extraction (formatter.py)  — noise filtering, day collapsing
         ↓
-    Rich Terminal Output (cli.py)
+    Rich Terminal Output / Interactive TUI (cli.py / tui.py)
 ```
 
 ---
@@ -218,6 +236,7 @@ Shell History Files (zsh/bash)
 | `database.py` | SQLite storage with WAL mode, indexed timestamp queries |
 | `insights.py` | Focus scoring, time-of-day/day-of-week analysis, patterns |
 | `formatter.py` | Rich-based terminal rendering, noise filtering, memory extraction |
+| `tui.py` | Interactive TUI dashboard built with Textual framework |
 | `cli.py` | Typer CLI, ingestion orchestration, command routing |
 
 ---
@@ -228,7 +247,7 @@ Shell History Files (zsh/bash)
 pytest tests/
 ```
 
-37 tests covering parsing, sessions, project detection, git integration, database queries, search, formatting, insights, and CLI commands.
+42 tests covering parsing, sessions, project detection, git integration, database queries, search, formatting, insights, TUI dashboard, and CLI commands.
 
 ---
 

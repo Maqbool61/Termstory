@@ -13,6 +13,7 @@ setup(
         "typer>=0.9.0",
         "python-dateutil>=2.8.2",
         "rich>=13.0.0",
+        "textual>=0.50.0",
     ],
     entry_points={
         "console_scripts": [
