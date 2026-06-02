@@ -216,9 +216,8 @@ class Database:
 
     def get_today_sessions(self) -> List[Session]:
         """Query and return today's sessions, commands, and project attributes"""
-        now = datetime.now()
-        start_of_today = datetime.combine(now.date(), time.min)
-        today_timestamp = int(start_of_today.timestamp())
+        from termstory.date_utils import get_today_range
+        start_ts, end_ts = get_today_range()
         
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -227,9 +226,9 @@ class Database:
         cursor.execute("""
             SELECT id, start_time, end_time, duration_seconds, project_id
             FROM sessions
-            WHERE start_time >= ?
+            WHERE start_time >= ? AND start_time <= ?
             ORDER BY start_time ASC
-        """, (today_timestamp,))
+        """, (start_ts, end_ts))
         session_rows = cursor.fetchall()
         
         sessions = []
