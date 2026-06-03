@@ -169,20 +169,64 @@ def generate_daily_chronicle_prompt(
     from datetime import datetime
     from termstory.models import format_duration
     from termstory.formatter import _is_noise_command
+    from collections import defaultdict
     
     project_map = {p.id: p.name for p in projects if p.id is not None}
     chrono_lines = []
     
     for idx, s in enumerate(sessions):
-        start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
-        end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
+        dt_start = datetime.fromtimestamp(s.start_time)
+        dt_end = datetime.fromtimestamp(s.end_time)
+        start_str = dt_start.strftime("%H:%M")
+        end_str = dt_end.strftime("%H:%M")
         duration_str = format_duration(s.duration_seconds)
         proj_name = project_map.get(s.project_id, "Other")
         if proj_name == "General / No Project":
             proj_name = "Other"
             
+        # Classify time of day for context
+        start_hour = dt_start.hour
+        if 0 <= start_hour < 5:
+            time_context = f"Late-Night/Goblin Mode ({start_str})"
+        elif 5 <= start_hour < 8:
+            time_context = f"Early Bird Coding ({start_str})"
+        elif 8 <= start_hour < 12:
+            time_context = f"Morning Session ({start_str})"
+        elif 12 <= start_hour < 14:
+            time_context = f"Midday Session ({start_str})"
+        elif 14 <= start_hour < 17:
+            time_context = f"Afternoon Session ({start_str})"
+        elif 17 <= start_hour < 21:
+            time_context = f"Evening Session ({start_str})"
+        else:
+            time_context = f"Night Owl Session ({start_str})"
+            
+        # Analyze activities based on commands
+        raw_cmds = [cmd.command for cmd in s.commands]
+        activities = []
+        
+        # Test detection
+        if any(any(x in cmd.lower() for x in ["test", "pytest", "unittest", "cargo test", "npm test", "go test"]) for cmd in raw_cmds):
+            activities.append("Debugging/Running Tests")
+        # Build detection
+        if any(any(x in cmd.lower() for x in ["build", "compile", "cargo build", "go build", "npm run build", "make"]) for cmd in raw_cmds):
+            activities.append("Compiling/Building Code")
+        # Editor detection
+        if any(any(x in cmd.lower() for x in ["vim", "nvim", "nano", "code", "emacs"]) for cmd in raw_cmds):
+            activities.append("Deep Focused Editing / Coding")
+        # Container/cloud detection
+        if any(any(x in cmd.lower() for x in ["docker", "kubectl", "aws", "terraform", "gcloud"]) for cmd in raw_cmds):
+            activities.append("Wrangling Containers/Infrastructure")
+        # Git detection
+        if any(any(x in cmd.lower() for x in ["git commit", "git push", "git add"]) for cmd in raw_cmds):
+            activities.append("Committing and Pushing Changes")
+            
+        activity_str = ", ".join(activities) if activities else "General Development"
+            
         chrono_lines.append(f"SESSION: [{start_str} - {end_str}] ({duration_str})")
+        chrono_lines.append(f"TIME CONTEXT: {time_context}")
         chrono_lines.append(f"PROJECT: {proj_name}")
+        chrono_lines.append(f"DETECTED ACTIVITY: {activity_str}")
         
         # Git commits
         if s.commits:
@@ -214,42 +258,56 @@ def generate_daily_chronicle_prompt(
                     gap_str.append(f"{gap_mins} minute{'s' if gap_mins > 1 else ''}")
                 gap_display = " and ".join(gap_str) if gap_str else f"{gap_seconds} seconds"
                 
-                s_end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
+                s_end_str = dt_end.strftime("%H:%M")
                 next_start_str = datetime.fromtimestamp(next_s.start_time).strftime("%H:%M")
                 
+                # Classify break type based on time
+                end_hour = dt_end.hour
+                if 11 <= end_hour < 14:
+                    break_context = "Lunch Time Break"
+                elif 18 <= end_hour < 21:
+                    break_context = "Dinner Time Break"
+                elif 23 <= end_hour or end_hour < 5:
+                    break_context = "Midnight Sleep/AFK"
+                else:
+                    break_context = "General Break / Away From Keyboard"
+                    
                 chrono_lines.append(f"[INFERRED BREAK]: Gap of {gap_display} (from {s_end_str} to {next_start_str})")
+                chrono_lines.append(f"BREAK CONTEXT: {break_context}")
                 chrono_lines.append("")
                 
     chrono_blocks = "\n".join(chrono_lines)
     
     prompt = (
-        "You are the core narrator for termstory, a developer memory engine. Your job is to translate raw shell history, git telemetry, and time-gap inferences into a non-boring, hyper-perceptive \"Story of You\" for a single day.\n\n"
+        "You are the master bard and core storyteller for termstory, a developer memory engine. "
+        "Your task is to transform raw command telemetry, git commits, and inferred time gaps into a beautiful, personalized, and slightly humorous 'Story of You' for a single developer day.\n\n"
+        
         "YOUR CORE RULES:\n"
-        "1. USE SECOND-PERSON: Address the developer directly as \"You\" (e.g., \"You stepped into the arena at...\" or \"You woke up and immediately chose violence...\").\n"
-        "2. DYNAMIC HANDLE: Always open the log using the provided GitHub handle (e.g., @username).\n"
-        "3. INFER HUMANITY: Use the gap markers (like [INFERRED BREAK]) to build a narrative arc. If they are in a failing test loop, call out the grit and frustration with dry humor.\n"
-        "4. NO CORPORATE SLOP: Absolutely no generic wrap-ups (\"All in all, it was a productive day!\"). Keep it grounded, technical, and slightly sarcastic.\n"
-        "5. FORMATTING: Use high-density terminal ASCII layouts (├─, 🧊, █) for session details.\n\n"
+        "1. DYNAMIC HANDLE & ASCII HEADER: Start the response with a compact, stylish ASCII-art console badge containing the operator's GitHub username. For example:\n"
+        "   ┌────────────────────────────────────────────────────────┐\n"
+        "   │  OPERATOR: @username                                   │\n"
+        "   │  CHRONICLE: YYYY-MM-DD                                 │\n"
+        "   └────────────────────────────────────────────────────────┘\n"
+        "   Use the provided handle: {github_username} and the date {session_date}.\n"
+        "2. USE SECOND-PERSON: Always address the developer as 'You' (e.g., 'You stepped into the arena at...', 'You woke up and immediately chose violence against bugs').\n"
+        "3. INTENTIONAL TIME & CHRONOLOGY: Group the sessions into chronological Acts (e.g., 'ACT I: THE GOBLIN MODE RUN', 'ACT II: THE AFTERNOON SLOG'). For each act, show the exact time range [HH:MM - HH:MM] and explicitly comment on the timing (e.g., call out if they are coding at 3 AM in 'Late-Night/Goblin Mode', or early morning, or afternoon fatigue).\n"
+        "4. INTEGRATE BREAKS & HUMOR (INFER HUMANITY): Use the BREAK CONTEXT markers to write fun, perceptive descriptions of what they did in between sessions. For example, if it's a Lunch Time Break, infer that they went for lunch, grabbed coffee, or stared blankly at a wall. If they were stuck in a loop of failing tests/compiles, highlight their stubborn determination with dry developer humor.\n"
+        "5. DENSE COMMAND & PROGRESSION: Detail what they were actually hacking on (e.g., 'refining and running tests on project X'). Use ASCII tree branches (├─, └─) or tech symbols (•, 🚀) to list key accomplishments under each act.\n"
+        "6. NO CORPORATE SLOP: Absolutely no generic, robotic wrap-ups or corporate management phrases like 'All in all, it was a productive day!'. Keep it authentic, slightly sarcastic, and developer-to-developer.\n"
+        "7. THE VERDICT CARD: End the chronicle with a high-density ASCII box summarizing the day's active hours, main achievements, and a witty verdict. For example:\n"
+        "   ================================────────────────====================\n"
+        "   [VERDICT] <1-2 sentences summarizing the day's engineering combat>\n"
+        "   ================================────────────────====================\n\n"
+        
         "OUTPUT FORMAT EXTREME REQUIREMENT:\n"
-        "Generate exactly the chronological acts of the day, inferred breaks, and the final VERDICT block. Only return the raw text. Do not wrap in markdown fences or add any preamble/postamble.\n\n"
-        "Example Output:\n"
-        "🌅 ACT I: THE MORNING SPRINT [09:15 - 11:45]\n"
-        "You woke up and immediately chose violence against technical debt.\n"
-        "├─ 📂 Project: Apache HugeGraph (`feature/hugegraph-indexing`)\n"
-        "├─ ⌨️  Action:  Fired up Neovim and spent 2.5 hours editing `store.go`.\n"
-        "└─ 🧠 Insight: You cleanly refactored the concurrent B-Tree traversal.\n\n"
-        "🍕 THE INTERMISSION [11:45 - 13:12]\n"
-        "[Inferred Break]: You dropped off the grid for 1 hour and 27 minutes.\n"
-        "The engine assumes you went to fetch lunch or stared blankly at a wall.\n\n"
-        "====================================================================\n"
-        "[VERDICT] You clocked 6h 18m of active terminal focus. You smashed your testing bottlenecks and left the codebase more secure than you found it.\n"
-        "====================================================================\n\n"
+        "Only return the raw text chronicle. Do not wrap in markdown code blocks (e.g. ```text or ```), and do not add any conversational preamble or postamble. Just output the clean, terminal-formatted story.\n\n"
+        
         "Input Data Payload:\n"
         f"USER_HANDLE: {github_username}\n"
         f"DATE: {session_date}\n"
         "CHRONO_BLOCKS:\n"
         f"{chrono_blocks}\n\n"
-        "Output format: Return ONLY the raw, polished daily chronicle acts and verdict block. No markdown formatting, no conversational filler, and no surrounding quotes."
+        "Output format: Return ONLY the raw daily chronicle story."
     )
     return prompt
 
