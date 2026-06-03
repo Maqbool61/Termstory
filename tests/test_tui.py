@@ -1,4 +1,5 @@
 import os
+import time
 import tempfile
 import pytest
 from datetime import datetime, timedelta
@@ -11,6 +12,10 @@ from termstory.tui import (
     generate_heatmap,
     calculate_dashboard_stats,
     get_session_memory_str,
+    deduplicate_sessions,
+    clean_command_to_memory,
+    strip_ansi,
+    OnboardingScreen,
 )
 
 def test_calculate_streak():
@@ -58,7 +63,7 @@ def test_get_session_memory_str():
         Command(timestamp=1000, command="git commit -m 'test'"),
         Command(timestamp=1001, command="ls") # noise
     ])
-    assert get_session_memory_str(s2) == "git commit -m 'test'"
+    assert get_session_memory_str(s2) == "test"
 
 def test_tui_workspace_init():
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -66,7 +71,7 @@ def test_tui_workspace_init():
         db = Database(db_path)
         db.init_db()
         
-        app = TermStoryWorkspace(db, days_limit=30)
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": True, "ai_enabled": False})
         assert app.db == db
         assert app.days_limit == 30
 
@@ -87,7 +92,7 @@ async def test_tui_workspace_mount():
         db.save_data([p], [s], [cmd])
         db.save_commits(1, [{"hash": "abcdefabcdef", "timestamp": now, "message": "feat: init", "cleaned_message": "Init"}])
         
-        app = TermStoryWorkspace(db, days_limit=30)
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": True, "ai_enabled": False})
         async with app.run_test() as pilot:
             # Verify widgets are instantiated and layout works
             assert app.query_one("#stats-panel") is not None
@@ -118,5 +123,334 @@ async def test_tui_workspace_mount():
             assert session_node.data["type"] == "session"
             assert session_node.data["session_id"] == 1
             assert session_node.data["project_id"] == 1
+
+
+def test_strip_ansi():
+    assert strip_ansi("\033[1;36mTermstory\033[0m") == "Termstory"
+    assert strip_ansi("Simple text") == "Simple text"
+
+
+def test_clean_command_to_memory():
+    # 1. Quoted git commit extraction
+    assert clean_command_to_memory("git commit -m 'docs: fix markdown'") == "docs: fix markdown"
+    assert clean_command_to_memory('git commit -s -m "feat: user login"') == "feat: user login"
+    
+    # 2. Humanize checkout and push/pull
+    assert clean_command_to_memory("git checkout -b feature/tui") == "Create branch feature/tui"
+    assert clean_command_to_memory("git checkout main") == "Switch to branch main"
+    assert clean_command_to_memory("git push origin main") == "Push changes to remote"
+    
+    # 3. Multi-command chain
+    assert clean_command_to_memory("git add . && git commit -m 'Release v0.1'") == "Release v0.1"
+
+
+def test_deduplicate_sessions():
+    s1 = Session(id=1, start_time=1000, end_time=2000, duration_seconds=1000, project_id=1)
+    s2 = Session(id=2, start_time=1000, end_time=2500, duration_seconds=1500, project_id=1) # duplicate expanding
+    s3 = Session(id=3, start_time=3000, end_time=4000, duration_seconds=1000, project_id=1) # unique
+    
+    deduped = deduplicate_sessions([s1, s2, s3])
+    assert len(deduped) == 2
+    assert deduped[0].id == 2 # kept max end_time
+    assert deduped[0].end_time == 2500
+    assert deduped[1].id == 3
+
+
+@pytest.mark.asyncio
+async def test_tui_update_session_label():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        # Save a session
+        now = int(datetime.now().timestamp())
+        p = Project(id=1, name="Project Alpha", path="~/alpha", first_seen=now, last_seen=now, session_count=1, total_time=600)
+        cmd = Command(timestamp=now, command="git diff", session_id=1, project_id=1)
+        s = Session(id=1, start_time=now, end_time=now + 600, duration_seconds=600, project_id=1, commands=[cmd])
+        db.save_data([p], [s], [cmd])
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": True, "ai_enabled": False})
+        async with app.run_test() as pilot:
+            tree = app.query_one("#history-navigator")
+            # Find the session leaf
+            def find_leaf(node):
+                if node.data and node.data.get("type") == "session":
+                    return node
+                for child in node.children:
+                    res = find_leaf(child)
+                    if res:
+                        return res
+                return None
+            leaf = find_leaf(tree.root)
+            assert leaf is not None
+            
+            # Update label in-place
+            tree.update_session_label(1, "Updated summary message")
+            assert "Updated summary message" in str(leaf.label)
+
+
+@pytest.mark.asyncio
+async def test_tui_onboarding_dismiss():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
+        async with app.run_test() as pilot:
+            app.handle_onboarding_result({
+                "ai_enabled": True,
+                "active_provider": "ollama",
+                "providers": {
+                    "ollama": {
+                        "api_key": "",
+                        "api_base_url": "http://localhost:11434/v1",
+                        "model_name": "llama3"
+                    }
+                },
+                "has_seen_onboarding": True
+            })
+            assert app.config["has_seen_onboarding"] is True
+            assert app.config["ai_enabled"] is True
+            assert app.config["active_provider"] == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_tui_update_stats_header():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": True, "ai_enabled": True, "active_provider": "groq"})
+        async with app.run_test() as pilot:
+            stats_panel = app.query_one("#stats-panel")
+            
+            # Active and idle
+            app.update_stats_header()
+            assert "AI: ACTIVE (GROQ)" in str(stats_panel.render())
+            
+            # Active and summarizing
+            app.ai_summarizing = True
+            app.update_stats_header()
+            assert "Summarizing..." in str(stats_panel.render())
+
+
+@pytest.mark.asyncio
+async def test_tui_action_show_onboarding():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": True})
+        async with app.run_test() as pilot:
+            # Trigger onboarding show action
+            app.action_show_onboarding()
+            # Verify OnboardingScreen is pushed on the stack
+            assert isinstance(app.screen, OnboardingScreen)
+
+
+@pytest.mark.asyncio
+async def test_tui_onboarding_click_disabled():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
+        async with app.run_test() as pilot:
+            # Press 'ctrl+d' (Keep Local Only shortcut) on OnboardingScreen
+            await pilot.press("ctrl+d")
+            assert app.config["has_seen_onboarding"] is True
+            assert app.config["ai_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_tui_onboarding_mouse_click():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
+        async with app.run_test(size=(120, 40)) as pilot:
+            # Click the disable button on OnboardingScreen
+            await pilot.click("#btn-disable-ai")
+            assert app.config["has_seen_onboarding"] is True
+            assert app.config["ai_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_tui_render_interactive_ai_buttons(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        now_ts = int(time.time())
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+        cmd = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd], ai_summary=None)
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": True, 
+                "active_provider": "groq",
+                "providers": {
+                    "groq": {
+                        "api_key": "gsk_test",
+                        "api_base_url": "https://api.groq.com/openai/v1",
+                        "model_name": "llama3"
+                    }
+                }
+            }
+        )
+        
+        called = []
+        def mock_generate_ai_summary(commands, api_key, api_base_url, model_name, provider, *args, **kwargs):
+            called.append(commands)
+            return "Generated AI summary description"
+            
+        monkeypatch.setattr("termstory.tui.generate_ai_summary", mock_generate_ai_summary)
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Press the Generate Story button programmatically
+            app.query_one("#btn-gen-session-1").press()
+            await pilot.pause()
+            
+            assert len(called) == 1
+            assert app.sessions[0].ai_summary == "Generated AI summary description"
+
+            import asyncio
+            # Wait for the button to disappear due to cooldown
+            for _ in range(50):
+                try:
+                    app.query_one("#btn-gen-session-1")
+                except Exception:
+                    break  # Button disappeared
+                await asyncio.sleep(0.05)
+                
+            # Clear the cooldown manually to test regeneration
+            app.sessions[0].recent_generation = False
+            app.refresh_details_canvas()
+            await pilot.pause()
+
+            # Press the button again (now it is '⟳ Regenerate' button)
+            app.query_one("#btn-gen-session-1").press()
+            await pilot.pause()
+
+            assert len(called) == 2
+            assert app.sessions[0].ai_summary == "Generated AI summary description"
+
+
+@pytest.mark.asyncio
+async def test_tui_generate_executive_review(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        now_ts = int(time.time())
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+        cmd = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd], ai_summary="Story")
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": True, 
+                "active_provider": "groq",
+                "providers": {
+                    "groq": {
+                        "api_key": "gsk_test",
+                        "api_base_url": "https://api.groq.com/openai/v1",
+                        "model_name": "llama3"
+                    }
+                }
+            }
+        )
+        
+        called = []
+        def mock_generate_executive_review(stats_summary, api_key, api_base_url, model_name, provider):
+            called.append(stats_summary)
+            return "Generated Executive Review text."
+            
+        monkeypatch.setattr("termstory.tui.generate_executive_review", mock_generate_executive_review)
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Press the generate executive review button programmatically
+            date_str = datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d")
+            app.query_one(f"#btn-exec-{date_str}-date").press()
+            await pilot.pause()
+            
+            assert len(called) == 1
+            cached = db.get_macro_summary(date_str)
+            assert cached == "Generated Executive Review text."
+
+
+@pytest.mark.asyncio
+async def test_tui_bulk_auto_summarize(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        monkeypatch.setattr("time.sleep", lambda secs: None)
+        
+        now_ts = int(time.time())
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts, session_count=1, total_time=0)
+        cmd = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd], ai_summary=None)
+        db.save_data([p], [s], [cmd])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": True, 
+                "active_provider": "groq",
+                "providers": {
+                    "groq": {
+                        "api_key": "gsk_test",
+                        "api_base_url": "https://api.groq.com/openai/v1",
+                        "model_name": "llama3"
+                    }
+                }
+            }
+        )
+        
+        called = []
+        def mock_generate_ai_summary(commands, api_key, api_base_url, model_name, provider, *args, **kwargs):
+            called.append(commands)
+            return "Bulk summary output"
+            
+        monkeypatch.setattr("termstory.tui.generate_ai_summary", mock_generate_ai_summary)
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Press the bulk auto-summarize button programmatically
+            date_str = datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d")
+            app.query_one(f"#btn-bulk-{date_str}-date").press()
+            await pilot.pause()
+            
+            assert len(called) == 1
+            assert app.sessions[0].ai_summary == "Bulk summary output"
+
+
 
 

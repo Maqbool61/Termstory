@@ -1,4 +1,6 @@
 import os
+import asyncio
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional, Any
@@ -7,16 +9,20 @@ from rich.console import Group
 from rich.text import Text
 from rich.table import Table
 
+from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Grid, Horizontal, Vertical
-from textual.widgets import Header, Footer, Tree, Static, Input
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
+from textual.widgets import Header, Footer, Tree, Static, Input, Button
+from textual.screen import ModalScreen
 from textual.reactive import reactive
 
 from termstory.models import Session, Project, Command, format_duration
 from termstory.database import Database
 from termstory.project import disambiguate_project_names
-from termstory.formatter import _is_noise_command
+from termstory.formatter import _is_noise_command, clean_command_to_memory
 from termstory.date_utils import get_current_time
+from termstory.config import load_config, save_config
+from termstory.ai import generate_ai_summary, generate_executive_review
 
 
 # ==========================================
@@ -97,36 +103,266 @@ def calculate_dashboard_stats(sessions: List[Session], projects: List[Project]) 
     }
 
 
+def compile_timeframe_stats_for_ai(sessions: List[Session], projects: List[Project]) -> str:
+    total_seconds = sum(s.duration_seconds for s in sessions)
+    total_hours = total_seconds / 3600.0
+    total_commits = sum(len(s.commits) for s in sessions)
+    
+    project_map = {p.id: p.name for p in projects if p.id is not None}
+    project_durations = defaultdict(int)
+    for s in sessions:
+        name = project_map.get(s.project_id, "Other")
+        if name == "General / No Project":
+            name = "Other"
+        project_durations[name] += s.duration_seconds
+        
+    dist_parts = []
+    if total_seconds > 0:
+        for name, dur in sorted(project_durations.items(), key=lambda x: x[1], reverse=True):
+            pct = int(round((dur / total_seconds) * 100))
+            dist_parts.append(f"{pct}% on {name}")
+            
+    dist_str = ", ".join(dist_parts)
+    return f"User worked {total_hours:.1f}h total. {dist_str}. {total_commits} total Git commits."
+
+
+import re
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from a string."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+
+
+
+def deduplicate_sessions(sessions: List[Session]) -> List[Session]:
+    """Group sessions by start_time and project_id, keeping only the one with the largest end_time."""
+    grouped = defaultdict(list)
+    for s in sessions:
+        key = (s.start_time, s.project_id)
+        grouped[key].append(s)
+        
+    deduped = []
+    for key, group in grouped.items():
+        best_session = max(group, key=lambda s: s.end_time)
+        deduped.append(best_session)
+        
+    return sorted(deduped, key=lambda s: s.start_time)
+
+
 def get_session_memory_str(session: Session) -> str:
-    """Extract a single-line summary memory for the session."""
+    """Extract a single-line summary memory for the session, ensuring no raw commands leak."""
+    if hasattr(session, "_cached_memory_str") and session._cached_memory_str is not None:
+        return session._cached_memory_str
+        
+    if session.ai_summary:
+        val = strip_ansi(session.ai_summary)
+        session._cached_memory_str = val
+        return val
+        
     if session.commits:
         c = session.commits[0]
-        return c.get("cleaned_message") or c.get("message") or "Code commit"
+        msg = c.get("cleaned_message") or c.get("message") or "Code commit"
+        val = strip_ansi(msg)
+        session._cached_memory_str = val
+        return val
         
     candidates = [cmd.command for cmd in session.commands if not _is_noise_command(cmd.command)]
     if candidates:
-        return max(candidates, key=len)
+        best_cmd = max(candidates, key=len)
+        val = strip_ansi(clean_command_to_memory(best_cmd))
+        session._cached_memory_str = val
+        return val
         
     if session.commands:
-        return session.commands[-1].command
+        val = strip_ansi(clean_command_to_memory(session.commands[-1].command))
+        session._cached_memory_str = val
+        return val
         
-    return "Activity logged"
+    val = "Activity logged"
+    session._cached_memory_str = val
+    return val
+
 
 
 # ==========================================
-# 2. TUI WIDGETS
+# 2. TUI WIDGETS & SCREENS
 # ==========================================
+
+class OnboardingScreen(ModalScreen[dict]):
+    """Modal screen displaying trust warning and AI configuration options."""
+    
+    BINDINGS = [
+        ("ctrl+g", "choose_groq", "Select Groq"),
+        ("ctrl+a", "choose_openai", "Select OpenAI"),
+        ("ctrl+l", "choose_ollama", "Select Ollama"),
+        ("ctrl+c", "choose_custom", "Select Custom"),
+        ("ctrl+d", "choose_disabled", "Keep Local Only (No AI)"),
+        ("escape", "dismiss_none", "Close"),
+    ]
+    
+    def __init__(self, current_config: dict):
+        super().__init__()
+        self.config = json.loads(json.dumps(current_config))
+        self.selected_provider = self.config.get("active_provider", "groq")
+        if self.selected_provider == "disabled":
+            self.selected_provider = "groq"
+            
+    def compose(self) -> ComposeResult:
+        provider_config = self.config.get("providers", {}).get(self.selected_provider, {})
+        api_key = provider_config.get("api_key", "")
+        base_url = provider_config.get("api_base_url", "")
+        model_name = provider_config.get("model_name", "")
+        
+        yield Vertical(
+            Static("🔒 TermStory Privacy & AI Onboarding", id="modal-title"),
+            Static(
+                "TermStory is completely offline by default. No data ever leaves your machine.\n\n"
+                "To make your timeline readable, you can optionally enable the AI Categorization Engine. "
+                "This will send sanitized terminal commands to an LLM to generate short, human-readable session memories.\n\n"
+                "Before sending, TermStory scrubs passwords, environment variables, IPs/FQDNs, and drops "
+                "sensitive sessions containing commands like 'vault' or 'aws configure' entirely.\n\n"
+                "[dim]Shortcuts: [bold]Ctrl+g[/]: Groq, [bold]Ctrl+a[/]: OpenAI, [bold]Ctrl+l[/]: Ollama, [bold]Ctrl+c[/]: Custom, [bold]Ctrl+d[/]: Disable AI, [bold]Esc[/]: Cancel[/dim]",
+                id="modal-desc"
+            ),
+            Horizontal(
+                Button("Groq [Ctrl+g]", variant="default", id="btn-select-groq"),
+                Button("OpenAI [Ctrl+a]", variant="default", id="btn-select-openai"),
+                Button("Ollama [Ctrl+l]", variant="default", id="btn-select-ollama"),
+                Button("Custom [Ctrl+c]", variant="default", id="btn-select-custom"),
+                id="modal-provider-selector"
+            ),
+            Vertical(
+                Input(value=api_key, placeholder="API Key...", password=True, id="input-api-key"),
+                Input(value=base_url, placeholder="API Base URL...", id="input-base-url"),
+                Input(value=model_name, placeholder="Model Name...", id="input-model-name"),
+                id="modal-inputs-container"
+            ),
+            Horizontal(
+                Button("Save & Enable", variant="success", id="btn-save"),
+                Button("Keep Local Only (No AI)", variant="error", id="btn-disable-ai"),
+                Button("Read Privacy Policy", variant="default", id="btn-read-privacy"),
+                Button("Cancel", variant="default", id="btn-cancel"),
+                id="modal-actions"
+            ),
+            id="modal-panel"
+        )
+        
+    def on_mount(self) -> None:
+        self.call_after_refresh(self.update_provider_ui, self.selected_provider)
+        
+    def update_provider_ui(self, provider: str) -> None:
+        self.selected_provider = provider
+        for p in ("groq", "openai", "ollama", "custom"):
+            btn = self.query_one(f"#btn-select-{p}")
+            if p == provider:
+                btn.variant = "primary"
+            else:
+                btn.variant = "default"
+                
+        provider_config = self.config.get("providers", {}).get(provider, {})
+        api_key_input = self.query_one("#input-api-key")
+        base_url_input = self.query_one("#input-base-url")
+        model_name_input = self.query_one("#input-model-name")
+        
+        api_key_input.value = provider_config.get("api_key", "")
+        base_url_input.value = provider_config.get("api_base_url", "")
+        model_name_input.value = provider_config.get("model_name", "")
+        
+        if provider == "ollama":
+            api_key_input.styles.display = "none"
+        else:
+            api_key_input.styles.display = "block"
+            
+    def action_choose_groq(self) -> None:
+        self.update_provider_ui("groq")
+        
+    def action_choose_openai(self) -> None:
+        self.update_provider_ui("openai")
+        
+    def action_choose_ollama(self) -> None:
+        self.update_provider_ui("ollama")
+        
+    def action_choose_custom(self) -> None:
+        self.update_provider_ui("custom")
+        
+    def action_choose_disabled(self) -> None:
+        self.config["ai_enabled"] = False
+        self.config["active_provider"] = "disabled"
+        self.config["has_seen_onboarding"] = True
+        self.dismiss(self.config)
+        
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+        
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id
+        if button_id.startswith("btn-select-"):
+            provider = button_id.replace("btn-select-", "")
+            self.update_provider_ui(provider)
+        elif button_id == "btn-read-privacy":
+            import webbrowser
+            from pathlib import Path
+            try:
+                path = Path(__file__).parent.parent / "DATA_PRIVACY.md"
+                if path.exists():
+                    webbrowser.open(path.resolve().as_uri())
+                else:
+                    cwd_path = Path("DATA_PRIVACY.md")
+                    if cwd_path.exists():
+                        webbrowser.open(cwd_path.resolve().as_uri())
+                    else:
+                        webbrowser.open("https://github.com/bitflicker64/Termstory/blob/main/DATA_PRIVACY.md")
+            except Exception:
+                pass
+        elif button_id == "btn-save":
+            api_key = self.query_one("#input-api-key").value.strip()
+            base_url = self.query_one("#input-base-url").value.strip()
+            model_name = self.query_one("#input-model-name").value.strip()
+            
+            if not base_url:
+                if self.selected_provider == "groq":
+                    base_url = "https://api.groq.com/openai/v1"
+                elif self.selected_provider == "openai":
+                    base_url = "https://api.openai.com/v1"
+                elif self.selected_provider == "ollama":
+                    base_url = "http://localhost:11434/v1"
+                    
+            if "providers" not in self.config:
+                self.config["providers"] = {}
+            if self.selected_provider not in self.config["providers"]:
+                self.config["providers"][self.selected_provider] = {}
+                
+            self.config["providers"][self.selected_provider]["api_key"] = api_key
+            self.config["providers"][self.selected_provider]["api_base_url"] = base_url
+            self.config["providers"][self.selected_provider]["model_name"] = model_name
+            
+            self.config["ai_enabled"] = True
+            self.config["active_provider"] = self.selected_provider
+            self.config["has_seen_onboarding"] = True
+            
+            self.dismiss(self.config)
+        elif button_id == "btn-disable-ai":
+            self.config["ai_enabled"] = False
+            self.config["active_provider"] = "disabled"
+            self.config["has_seen_onboarding"] = True
+            self.dismiss(self.config)
+        elif button_id == "btn-cancel":
+            self.dismiss(None)
+
 
 class StatsHeader(Static):
     """The cumulative stats header spanning the top of the interface."""
     
-    def update_stats(self, stats: Dict[str, Any]) -> None:
+    def update_stats(self, stats: Dict[str, Any], ai_status: str = "") -> None:
         self.update(
             f"[bold cyan]TermStory Dashboard[/bold cyan]  │  "
             f"[bold]Time logged:[/bold] {stats['total_time']}  │  "
             f"[bold]Active Days:[/bold] {stats['active_days']}  │  "
             f"[bold green]Streak:[/bold green] {stats['streak']} Days  │  "
-            f"[bold]Projects:[/bold] {stats['projects_count']}\n"
+            f"[bold]Projects:[/bold] {stats['projects_count']}  │  "
+            f"{ai_status}\n"
             f"[dim]Activity (Last 30 Days):[/dim] {stats['heatmap']}"
         )
 
@@ -140,98 +376,118 @@ class HistoryTree(Tree):
     ]
     
     def populate(self, projects: List[Project], sessions: List[Session], search_query: Optional[str] = None) -> None:
-        self.clear()
-        
-        project_map = {p.id: p for p in projects if p.id is not None}
-        display_names = disambiguate_project_names(projects)
-        
-        # Pre-filter sessions if a search query is active
-        if search_query:
-            q = search_query.lower()
-            filtered_sessions = []
-            for s in sessions:
-                proj = project_map.get(s.project_id)
-                proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
-                if proj_name == "General / No Project":
-                    proj_name = "Other"
-                memory = get_session_memory_str(s)
-                cmd_match = any(q in cmd.command.lower() for cmd in s.commands)
-                commit_match = any(q in (c.get("message", "") + " " + c.get("cleaned_message", "")).lower() for c in s.commits)
-                if q in proj_name.lower() or q in memory.lower() or cmd_match or commit_match:
-                    filtered_sessions.append(s)
-            sessions_to_build = filtered_sessions
-        else:
-            sessions_to_build = sessions
-            
-        # Group sessions hierarchically: Month -> Date -> Project -> List of sessions
-        # nested[month_key][day_key][project_id] = [sessions]
-        nested = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-        for s in sessions_to_build:
-            dt = datetime.fromtimestamp(s.start_time)
-            month_key = dt.strftime("%B %Y")
-            day_key = dt.strftime("%Y-%m-%d")
-            nested[month_key][day_key][s.project_id].append(s)
-            
-        # Sort Months chronologically (newest first)
-        def parse_month_key(m_key: str) -> Tuple[int, int]:
-            dt_parsed = datetime.strptime(m_key, "%B %Y")
-            return (dt_parsed.year, dt_parsed.month)
-            
-        sorted_months = sorted(nested.keys(), key=parse_month_key, reverse=True)
-        
-        # Helper to sort project IDs alphabetically with "Other" last
-        def project_sort_key(p_id):
-            if p_id is None:
-                return (1, "other")
-            p_obj = project_map.get(p_id)
-            p_name = display_names.get(p_id, "Other") if p_obj else "Other"
-            if p_name == "General / No Project":
-                p_name = "Other"
-            return (0, p_name.lower())
-            
-        for m_key in sorted_months:
-            month_dt = datetime.strptime(m_key, "%B %Y")
-            month_node = self.root.add(
-                m_key,
-                data={"type": "month", "year": month_dt.year, "month": month_dt.month},
-                expand=True
-            )
-            
-            sorted_days = sorted(nested[m_key].keys(), reverse=True)
-            for day_key in sorted_days:
-                day_dt = datetime.strptime(day_key, "%Y-%m-%d")
-                # Format: "Jun 03 (Wed)"
-                day_label = day_dt.strftime("%b %d (%a)")
-                day_node = month_node.add(
-                    day_label,
-                    data={"type": "date", "date_str": day_key},
-                    expand=True
-                )
-                
-                sorted_project_ids = sorted(nested[m_key][day_key].keys(), key=project_sort_key)
-                for p_id in sorted_project_ids:
-                    proj = project_map.get(p_id)
-                    proj_name = display_names.get(p_id, "Other") if proj else "Other"
+        # Flag to inform the app that the tree is being built
+        self.app._populating_tree = True
+        try:
+            self.clear()
+
+            project_map = {p.id: p for p in projects if p.id is not None}
+            display_names = disambiguate_project_names(projects)
+
+            # Pre-filter sessions if a search query is active
+            if search_query:
+                q = search_query.lower()
+                filtered_sessions = []
+                for s in sessions:
+                    proj = project_map.get(s.project_id)
+                    proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
                     if proj_name == "General / No Project":
                         proj_name = "Other"
-                        
-                    proj_node = day_node.add(
-                        proj_name,
-                        data={"type": "project", "project_id": p_id, "date_str": day_key},
-                        expand=False
+                    memory = get_session_memory_str(s)
+                    cmd_match = any(q in cmd.command.lower() for cmd in s.commands)
+                    commit_match = any(q in (c.get("message", "") + " " + c.get("cleaned_message", "")).lower() for c in s.commits)
+                    if q in proj_name.lower() or q in memory.lower() or cmd_match or commit_match:
+                        filtered_sessions.append(s)
+                sessions_to_build = filtered_sessions
+            else:
+                sessions_to_build = sessions
+
+            # Group sessions hierarchically: Month -> Date -> Project -> List of sessions
+            nested = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+            for s in sessions_to_build:
+                dt = datetime.fromtimestamp(s.start_time)
+                month_key = dt.strftime("%B %Y")
+                day_key = dt.strftime("%Y-%m-%d")
+                nested[month_key][day_key][s.project_id].append(s)
+
+            # Sort Months chronologically (newest first)
+            def parse_month_key(m_key: str) -> Tuple[int, int]:
+                dt_parsed = datetime.strptime(m_key, "%B %Y")
+                return (dt_parsed.year, dt_parsed.month)
+
+            sorted_months = sorted(nested.keys(), key=parse_month_key, reverse=True)
+
+            # Helper to sort project IDs alphabetically with "Other" last
+            def project_sort_key(p_id):
+                if p_id is None:
+                    return (1, "other")
+                p_obj = project_map.get(p_id)
+                p_name = display_names.get(p_id, "Other") if p_obj else "Other"
+                if p_name == "General / No Project":
+                    p_name = "Other"
+                return (0, p_name.lower())
+
+            for m_key in sorted_months:
+                month_dt = datetime.strptime(m_key, "%B %Y")
+                month_node = self.root.add(
+                    m_key,
+                    data={"type": "month", "year": month_dt.year, "month": month_dt.month},
+                    expand=True
+                )
+
+                sorted_days = sorted(nested[m_key].keys(), reverse=True)
+                for day_key in sorted_days:
+                    day_dt = datetime.strptime(day_key, "%Y-%m-%d")
+                    day_label = day_dt.strftime("%b %d (%a)")
+                    day_node = month_node.add(
+                        day_label,
+                        data={"type": "date", "date_str": day_key},
+                        expand=True
                     )
-                    
-                    sorted_sessions = sorted(nested[m_key][day_key][p_id], key=lambda x: x.start_time)
-                    for s in sorted_sessions:
-                        memory = get_session_memory_str(s)
-                        start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
-                        end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
-                        
-                        session_label = f"✨ {memory} [dim]({start_str} - {end_str})[/]"
-                        proj_node.add_leaf(
-                            session_label,
-                            data={"type": "session", "project_id": p_id, "session_id": s.id}
+
+                    sorted_project_ids = sorted(nested[m_key][day_key].keys(), key=project_sort_key)
+                    for p_id in sorted_project_ids:
+                        proj = project_map.get(p_id)
+                        proj_name = display_names.get(p_id, "Other") if proj else "Other"
+                        if proj_name == "General / No Project":
+                            proj_name = "Other"
+
+                        proj_node = day_node.add(
+                            proj_name,
+                            data={"type": "project", "project_id": p_id, "date_str": day_key},
+                            expand=False
                         )
+
+                        sorted_sessions = sorted(nested[m_key][day_key][p_id], key=lambda x: x.start_time)
+                        for s in sorted_sessions:
+                            memory = get_session_memory_str(s)
+                            start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
+                            end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
+
+                            session_label = f"✨ {memory} [dim]({start_str} - {end_str})[/]"
+                            proj_node.add_leaf(
+                                session_label,
+                                data={"type": "session", "project_id": p_id, "session_id": s.id}
+                            )
+            self.root.expand()
+        finally:
+            # Ensure flag is cleared even if errors occur
+            self.app._populating_tree = False
+
+    def update_session_label(self, session_id: int, new_summary: str) -> None:
+        """Find the leaf node representing session_id and update its label dynamically."""
+        def traverse(node):
+            if node.data and node.data.get("type") == "session" and node.data.get("session_id") == session_id:
+                label_str = str(node.label)
+                time_match = re.search(r'(\[dim\].*?\[/\])', label_str)
+                time_part = time_match.group(1) if time_match else ""
+                node.label = f"✨ {new_summary} {time_part}"
+                return True
+            for child in node.children:
+                if traverse(child):
+                    return True
+            return False
+        traverse(self.root)
 
 
 def make_stacked_bar(project_seconds: Dict[str, int], total_seconds: int, width: int = 40) -> Tuple[str, str]:
@@ -269,17 +525,27 @@ def make_stacked_bar(project_seconds: Dict[str, int], total_seconds: int, width:
     return bar_str, "  ".join(legend_parts)
 
 
-class DetailsCanvas(Static):
+class DetailsCanvas(VerticalScroll):
     """Display overall metrics, dynamic time distribution bar, and Git/Command details."""
     
+    can_focus = True
+    
     def update_view_empty(self) -> None:
-        self.update(Text.from_markup("\n\n[dim italic]Select a session node from the explorer to view detailed logs.[/dim italic]"))
+        self.remove_children()
+        self.mount(Static(Text.from_markup("\n\n[dim italic]Select a session node from the explorer to view detailed logs.[/dim italic]")))
         
-    def render_time_summary(self, title: str, sessions: List[Session], projects: List[Project]) -> None:
+    def render_time_summary(
+        self,
+        title: str,
+        sessions: List[Session],
+        projects: List[Project],
+        timeframe_id: Optional[str] = None,
+        timeframe_type: Optional[str] = None
+    ) -> None:
         """STATE A: Time Summary View (Today/Week/Month or overall)"""
-        from rich.panel import Panel
+        self.remove_children()
         
-        elements = []
+        from rich.panel import Panel
         
         total_time_seconds = sum(s.duration_seconds for s in sessions)
         total_time_str = format_duration(total_time_seconds)
@@ -288,9 +554,9 @@ class DetailsCanvas(Static):
         active_projects_count = len(active_project_ids)
         total_commits = sum(len(s.commits) for s in sessions)
         
-        elements.append(Text.from_markup(f"[bold white]{title}[/bold white]\n"))
+        # 1. Title & Hero stats
+        elements = [Text.from_markup(f"[bold white]{title}[/bold white]\n")]
         
-        # 1. Hero Banner: Side-by-side metric cards
         card1 = Panel(
             Text.from_markup(f"[bold cyan]{total_time_str}[/]\n[dim]Total Time Logged[/]"),
             border_style="bright_black",
@@ -334,9 +600,73 @@ class DetailsCanvas(Static):
         bar, legend = make_stacked_bar(project_seconds, total_time_seconds, width=60)
         elements.append(Text.from_markup(f"{bar}\n\n{legend}\n\n"))
         
-        # 3. Session Feed
-        elements.append(Text.from_markup("[bold]Activity Feed[/bold]\n"))
+        # Mount the static parts (Rich renderables only)
+        self.mount(Static(Group(*elements)))
+        
+        # Mount the Configure AI button only when AI is not yet configured
+        self.query_children(".configure-ai-btn").remove()
+        ai_enabled = self.app.config.get("ai_enabled", False)
+        provider = self.app.config.get("active_provider", "disabled")
+        
+        if not ai_enabled or provider == "disabled":
+            btn_configure = Button("⚙️ Configure AI")
+            btn_configure.classes = "configure-ai-btn"
+            self.mount(btn_configure)
+        
+        if ai_enabled and provider != "disabled" and timeframe_id and timeframe_type in ("month", "date"):
+            # A. Executive Review Section
+            exec_widgets = [Static("[bold gold]━━━ AI Executive Review ━━━[/bold gold]\n")]
+            
+            cached_exec = self.app.db.get_macro_summary(timeframe_id)
+            if cached_exec:
+                exec_widgets.append(Static(f"{cached_exec}\n"))
+            elif timeframe_id in getattr(self.app, "generating_reviews", set()):
+                exec_widgets.append(Static("⏳ [italic yellow]Generating Executive Review... please wait[/italic yellow]\n"))
+            else:
+                stats_summary = compile_timeframe_stats_for_ai(sessions, projects)
+                exec_widgets.append(Static("[dim]Ask AI to write a high-level summary of your work for this period:[/dim]"))
+                try:
+                    btn = Button("✨ Generate Executive Review", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                    btn.classes = "exec-btn"
+                    self.app._temp_stats_summary = stats_summary
+                    exec_widgets.append(btn)
+                except Exception:
+                    pass
+                
+            self.mount(Vertical(*exec_widgets, classes="exec-container"))
+            
+            # B. Bulk Auto-Summarize Section
+            missing_sessions = [s for s in sessions if not s.ai_summary]
+            if missing_sessions:
+                bulk_widgets = []
+                bulk_progress = getattr(self.app, "bulk_running_timeframes", {})
+                
+                if timeframe_id in bulk_progress:
+                    current, total = bulk_progress[timeframe_id]
+                    bulk_widgets.append(Static(f"⏳ [bold yellow]Auto-summarizing sessions: {current}/{total} done...[/bold yellow]\n"))
+                else:
+                    bulk_widgets.append(Static(f"[dim]{len(missing_sessions)} sessions still need AI stories. Generate them all at once:[/dim]"))
+                    try:
+                        btn = Button(f"🚀 Auto-Summarize {len(missing_sessions)} Sessions", id=f"btn-bulk-{timeframe_id}-{timeframe_type}")
+                        btn.classes = "bulk-btn"
+                        bulk_widgets.append(btn)
+                    except Exception:
+                        pass
+                self.mount(Vertical(*bulk_widgets, classes="bulk-container"))
+                
+        # 4. Activity Feed
+        feed_widgets = [Static("[bold]Activity Feed[/bold]", classes="section-title")]
+        
+        # Limit feed to recent 30 sessions for month/overall overview to avoid UI lag
         sorted_sessions = sorted(sessions, key=lambda s: s.start_time)
+        is_limited = False
+        if timeframe_type in ("month", "overall") and len(sorted_sessions) > 30:
+            sorted_sessions = sorted_sessions[-30:]
+            is_limited = True
+            
+        if is_limited:
+            feed_widgets.append(Static(f"[dim italic]Showing the 30 most recent sessions of this timeframe:[/dim italic]\n"))
+            
         project_map = {p.id: p for p in projects if p.id is not None}
         
         for s in sorted_sessions:
@@ -346,27 +676,49 @@ class DetailsCanvas(Static):
                 proj_name = "Other"
                 
             dur_str = format_duration(s.duration_seconds)
-            memory = get_session_memory_str(s)
-            start_time_str = datetime.fromtimestamp(s.start_time).strftime("%I:%M %p")
+            start_time_str = s.start_time_formatted
             
-            feed_item = Text()
-            feed_item.append(f"• {start_time_str} ", style="dim")
-            feed_item.append(f"{proj_name} ", style="bold cyan" if proj_name != "Other" else "bold green")
-            feed_item.append(f"({dur_str})\n", style="dim")
-            feed_item.append(f"  └─ ✨ {memory}\n", style="white")
-            elements.append(feed_item)
+            item_text = Text()
+            item_text.append(f"• {start_time_str} ", style="dim")
+            item_text.append(f"{proj_name} ", style="bold cyan" if proj_name != "Other" else "bold green")
+            item_text.append(f"({dur_str})\n", style="dim")
             
-        self.update(Group(*elements))
-        
+            feed_widgets.append(Static(item_text))
+            
+            # Show summary or generate button
+            if s.ai_summary:
+                feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
+                if ai_enabled and provider != "disabled" and not getattr(s, "recent_generation", False):
+                    btn = Button("⟳ Regenerate", id=f"btn-gen-session-{s.id}")
+                    btn.classes = "gen-story-btn small-btn"
+                    row = Horizontal(Static("      "), btn, classes="btn-row")
+                    feed_widgets.append(row)
+                else:
+                    feed_widgets.append(Static("\n"))
+            elif getattr(s, "is_generating_story", False):
+                feed_widgets.append(Static("  └─ ⏳ [italic yellow]Thinking...[/italic yellow]\n"))
+            else:
+                if ai_enabled and provider != "disabled":
+                    btn = Button("✨ Generate Story", id=f"btn-gen-session-{s.id}")
+                    btn.classes = "gen-story-btn"
+                    row = Horizontal(Static("  └─ "), btn, classes="btn-row")
+                    feed_widgets.append(row)
+                else:
+                    # fallback to heuristic summary
+                    heur = get_session_memory_str(s)
+                    feed_widgets.append(Static(f"  └─ {heur}\n"))
+                    
+        self.mount(Vertical(*feed_widgets, classes="feed-container"))
+
     def render_session_details(self, project: Optional[Project], session: Session) -> None:
-        elements = []
+        self.remove_children()
         
         proj_name = project.name if project else "Other"
         if proj_name == "General / No Project":
             proj_name = "Other"
         proj_path = project.path if project else "N/A"
         
-        start_str = datetime.fromtimestamp(session.start_time).strftime("%I:%M %p")
+        start_str = session.start_time_formatted
         end_str = datetime.fromtimestamp(session.end_time).strftime("%I:%M %p")
         date_str = datetime.fromtimestamp(session.start_time).strftime("%A, %B %d, %Y")
         duration_str = format_duration(session.duration_seconds)
@@ -376,7 +728,30 @@ class DetailsCanvas(Static):
         header.append(f"Workspace Path: {proj_path}\n", style="dim")
         header.append(f"Session Window: {date_str} ({start_str} → {end_str}) [{duration_str}]\n", style="dim")
         header.append("─" * 60 + "\n", style="dim")
-        elements.append(header)
+        self.mount(Static(header))
+        
+        ai_enabled = self.app.config.get("ai_enabled", False)
+        provider = self.app.config.get("active_provider", "disabled")
+        
+        # Display AI summary or dynamic button at the top of details
+        ai_widgets = [Static("[bold gold]Session Summary Story[/bold gold]")]
+        if session.ai_summary:
+            ai_widgets.append(Static(f"✨ {strip_ansi(session.ai_summary)}\n"))
+            if ai_enabled and provider != "disabled" and not getattr(session, "recent_generation", False):
+                btn = Button("⟳ Regenerate", id=f"btn-gen-session-{session.id}")
+                btn.classes = "gen-story-btn small-btn"
+                ai_widgets.append(btn)
+        elif getattr(session, "is_generating_story", False):
+            ai_widgets.append(Static("⏳ [italic yellow]Thinking...[/italic yellow]\n"))
+        elif ai_enabled and provider != "disabled":
+            btn = Button("✨ Generate Story", id=f"btn-gen-session-{session.id}")
+            btn.classes = "gen-story-btn"
+            ai_widgets.append(btn)
+        else:
+            ai_widgets.append(Static(f"{get_session_memory_str(session)}\n"))
+        
+        self.mount(Vertical(*ai_widgets, classes="session-ai-container"))
+        self.mount(Static("\n"))
         
         if session.commits:
             git_section = Text()
@@ -387,7 +762,7 @@ class DetailsCanvas(Static):
                 git_section.append(f"  • [{short_hash}] ", style="yellow")
                 git_section.append(f"{msg}\n", style="white")
             git_section.append("\n")
-            elements.append(git_section)
+            self.mount(Static(git_section))
             
         cmd_section = Text()
         cmd_section.append("💻 Command Timeline:\n", style="bold yellow")
@@ -401,8 +776,7 @@ class DetailsCanvas(Static):
                 cmd_section.append(f"  • {t_str}  ", style="cyan")
                 cmd_section.append(f"{cmd.command}\n", style="bold white")
                 
-        elements.append(cmd_section)
-        self.update(Group(*elements))
+        self.mount(Static(cmd_section))
 
 
 # ==========================================
@@ -416,6 +790,13 @@ class TermStoryWorkspace(App):
         ("q", "quit_app", "Quit"),
         ("escape", "quit_app", "Quit"),
         ("slash", "start_search", "Search"),
+        ("o", "show_onboarding", "Configure AI"),
+        ("ctrl+down", "scroll_canvas_down", ""),
+        ("ctrl+up", "scroll_canvas_up", ""),
+        ("ctrl+j", "scroll_canvas_down", ""),
+        ("ctrl+k", "scroll_canvas_up", ""),
+        ("ctrl+pagedown", "scroll_canvas_page_down", ""),
+        ("ctrl+pageup", "scroll_canvas_page_up", ""),
     ]
     
     CSS = """
@@ -429,6 +810,12 @@ class TermStoryWorkspace(App):
         grid-rows: auto 1fr;
         grid-columns: 30% 70%;
         height: 100%;
+    }
+    .configure-ai-btn {
+        margin: 1 2;
+        background: $surface;
+        color: $text;
+        min-width: 20;
     }
     #stats-panel {
         column-span: 2;
@@ -459,14 +846,142 @@ class TermStoryWorkspace(App):
         height: 100%;
         background: #121214;
     }
+    OnboardingScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+    #modal-panel {
+        background: #1a1a1e;
+        border: solid #3e3e4a;
+        width: 90%;
+        max-width: 75;
+        height: auto;
+        padding: 2;
+        content-align: center middle;
+    }
+    #modal-title {
+        text-align: center;
+        text-style: bold;
+        color: #00ffff;
+        margin-bottom: 1;
+    }
+    #modal-desc {
+        margin-bottom: 1;
+        color: #e2e2e9;
+    }
+    #modal-provider-selector {
+        align: center middle;
+        margin-bottom: 1;
+        height: 3;
+    }
+    #modal-provider-selector Button {
+        margin: 0 1;
+    }
+    #modal-inputs-container {
+        margin-bottom: 1;
+        height: auto;
+    }
+    #modal-inputs-container Input {
+        margin-bottom: 1;
+    }
+    #modal-actions {
+        align: center middle;
+        height: 3;
+    }
+    #modal-actions Button {
+        margin: 0 1;
+    }
+    #details-canvas Button {
+        height: 3;
+        border: tall #3e3e4a;
+        background: #2a2a30;
+        color: #e2e2e9;
+        margin: 1 0;
+        padding: 0 2;
+        min-width: 20;
+        text-style: bold;
+        transition: background 150ms, color 150ms, border 150ms;
+    }
+    #details-canvas Button:hover {
+        background: #00bcd4;
+        color: #121214;
+        border: tall #00ffff;
+    }
+    #details-canvas Button:focus {
+        background: #00bcd4;
+        color: #121214;
+        border: tall #00ffff;
+    }
+    #details-canvas .bulk-btn {
+        background: #1a3a5c;
+        color: #7dd3fc;
+        border: tall #0284c7;
+    }
+    #details-canvas .bulk-btn:hover {
+        background: #0284c7;
+        color: white;
+        border: tall #38bdf8;
+    }
+    #details-canvas .exec-btn {
+        background: #3d2800;
+        color: #fbbf24;
+        border: tall #d97706;
+    }
+    #details-canvas .exec-btn:hover {
+        background: #d97706;
+        color: white;
+        border: tall #fbbf24;
+    }
+    #details-canvas .gen-story-btn {
+        background: #1a2e1a;
+        color: #86efac;
+        border: tall #22c55e;
+    }
+    #details-canvas .gen-story-btn:hover {
+        background: #22c55e;
+        color: #121214;
+        border: tall #86efac;
+    }
+    #details-canvas .small-btn {
+        height: 1;
+        border: none;
+        min-width: 12;
+        padding: 0 1;
+        margin: 0 1;
+        background: transparent;
+        color: #86efac;
+    }
+    #details-canvas .small-btn:hover {
+        background: #22c55e;
+        color: #121214;
+    }
+    .btn-row {
+        height: auto;
+        margin-bottom: 1;
+    }
+    .btn-row Static {
+        width: 5;
+        height: auto;
+    }
+    .exec-container, .bulk-container, .session-ai-container, .feed-container {
+        margin: 1 0;
+        height: auto;
+    }
     """
     
-    def __init__(self, db: Database, days_limit: Optional[int] = 30):
+    def __init__(self, db: Database, days_limit: Optional[int] = 90, config_override: Optional[dict] = None):
         super().__init__()
         self.db = db
         self.days_limit = days_limit
         self.sessions = []
         self.projects = []
+        self.ai_summarizing = False
+        self.config_override = config_override
+        self._populating_tree = False
+        self.config = {}
+        self.generating_reviews = set()
+        self.bulk_running_timeframes = {}
+        self.generating_session_stories = set()
         
     def compose(self) -> ComposeResult:
         yield Header()
@@ -479,23 +994,32 @@ class TermStoryWorkspace(App):
         yield Footer()
         
     def on_mount(self) -> None:
+        if self.config_override is not None:
+            self.config = self.config_override
+        else:
+            self.config = load_config()
+            
         if self.days_limit:
             start_ts = int((get_current_time() - timedelta(days=self.days_limit)).timestamp())
         else:
             start_ts = 0
             
-        # Get active sessions and projects
-        self.sessions = self.db.get_range_sessions(start_ts, int(get_current_time().timestamp()))
+        # Get active sessions and projects, applying deduplication
+        raw_sessions = self.db.get_range_sessions(start_ts, int(get_current_time().timestamp()))
+        self.sessions = deduplicate_sessions(raw_sessions)
         project_ids = list(set(s.project_id for s in self.sessions if s.project_id is not None))
         self.projects = self.db.get_projects_by_ids(project_ids)
         
         # Render top stats header
-        stats = calculate_dashboard_stats(self.sessions, self.projects)
-        self.query_one("#stats-panel").update_stats(stats)
+        self.update_stats_header()
         
         # Populate history navigator tree
         tree = self.query_one("#history-navigator")
         tree.populate(self.projects, self.sessions)
+        
+        # Handle onboarding or start summarization
+        if not self.config.get("has_seen_onboarding", False):
+            self.push_screen(OnboardingScreen(self.config), self.handle_onboarding_result)
         
         # Automatically focus today's date node or the most recent date node
         today_str = get_current_time().strftime("%Y-%m-%d")
@@ -517,9 +1041,277 @@ class TermStoryWorkspace(App):
         else:
             self.query_one("#details-canvas").render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
             tree.focus()
+
+    def handle_onboarding_result(self, result: Optional[dict]) -> None:
+        if result:
+            self.config = result
+            save_config(self.config)
+            self.update_stats_header()
+            self.refresh_details_canvas()
+        self.query_one("#history-navigator").focus()
+
+    def update_stats_header(self) -> None:
+        stats = calculate_dashboard_stats(self.sessions, self.projects)
+        ai_enabled = self.config.get("ai_enabled", False)
+        provider = self.config.get("active_provider", "disabled")
         
+        if not ai_enabled or provider == "disabled":
+            ai_status = "[dim]AI: DISABLED[/dim]"
+        else:
+            is_summarizing = getattr(self, "ai_summarizing", False)
+            if is_summarizing:
+                ai_status = f"[bold yellow]AI: ACTIVE ({provider.upper()}) (⏳ Summarizing...)[/bold yellow]"
+            else:
+                ai_status = f"[bold cyan]AI: ACTIVE ({provider.upper()})[/bold cyan]"
+                
+        self.query_one("#stats-panel").update_stats(stats, ai_status=ai_status)
+
+    def update_session_ui(self, session_id: int, new_summary: str) -> None:
+        """Update tree node label and refresh details canvas if necessary. Safe to run on main thread."""
+        tree = self.query_one("#history-navigator")
+        tree.update_session_label(session_id, new_summary)
+        tree.refresh()
+        self.refresh_details_canvas()
+
+    def refresh_details_canvas(self) -> None:
+        """Helper to re-render the currently selected node's content on the details canvas.
+        
+        Guarded against re-entrancy to prevent render storms from background workers.
+        """
+        if getattr(self, "_refreshing_canvas", False):
+            return
+        self._refreshing_canvas = True
+        try:
+            tree = self.query_one("#history-navigator")
+            selected_node = tree.cursor_node
+            if not selected_node:
+                self.query_one("#details-canvas").update_view_empty()
+                return
+            
+            self._show_node_details(selected_node)
+        except Exception:
+            pass
+        finally:
+            self._refreshing_canvas = False
+
+    @work(thread=True)
+    def generate_single_session_story(self, session: Session) -> None:
+        """Generate AI summary for a single session in a background thread."""
+        provider = self.config.get("active_provider", "disabled")
+        if provider == "disabled":
+            return
+
+        provider_config = self.config.get("providers", {}).get(provider, {})
+        api_key = provider_config.get("api_key", "")
+        api_base_url = provider_config.get("api_base_url", "")
+        model_name = provider_config.get("model_name", "")
+
+        if provider in ("groq", "openai") and not api_key:
+            return
+
+        session.is_generating_story = True
+        self.call_from_thread(self.refresh_details_canvas)
+
+        project_map = {p.id: p for p in self.projects if p.id is not None}
+        proj = project_map.get(session.project_id)
+        proj_name = proj.name if proj else "Other"
+        if proj_name == "General / No Project":
+            proj_name = "Other"
+
+        commands = [cmd.command for cmd in session.commands]
+        summary = generate_ai_summary(
+            commands=commands,
+            api_key=api_key,
+            api_base_url=api_base_url,
+            model_name=model_name,
+            provider=provider,
+            project_name=proj_name
+        )
+
+        session.is_generating_story = False
+        if summary:
+            self.db.save_session_ai_summary(session.id, summary)
+            session.ai_summary = summary
+            if hasattr(session, "_cached_memory_str"):
+                delattr(session, "_cached_memory_str")
+            
+            session.recent_generation = True
+            def clear_recent(s=session):
+                s.recent_generation = False
+                self.refresh_details_canvas()
+            self.call_from_thread(self.set_timer, 15.0, clear_recent)
+            
+            self.call_from_thread(self.update_session_ui, session.id, summary)
+        else:
+            self.call_from_thread(self.refresh_details_canvas)
+
+    @work(exclusive=True)
+    async def debounce_search(self, query: str) -> None:
+        """Debounced search — waits briefly then repopulates the tree."""
+        await asyncio.sleep(0.25)
+        tree = self.query_one("#history-navigator")
+        tree.populate(self.projects, self.sessions, search_query=query)
+        self.refresh_details_canvas()
+
+    @work(thread=True)
+    def generate_timeframe_executive_review(self, timeframe_id: str, timeframe_type: str, stats_summary: str) -> None:
+        provider = self.config.get("active_provider", "disabled")
+        if provider == "disabled":
+            return
+            
+        provider_config = self.config.get("providers", {}).get(provider, {})
+        api_key = provider_config.get("api_key", "")
+        api_base_url = provider_config.get("api_base_url", "")
+        model_name = provider_config.get("model_name", "")
+        
+        if provider in ("groq", "openai") and not api_key:
+            return
+            
+        self.generating_reviews.add(timeframe_id)
+        self.call_from_thread(self.refresh_details_canvas)
+        
+        summary = generate_executive_review(
+            stats_summary=stats_summary,
+            api_key=api_key,
+            api_base_url=api_base_url,
+            model_name=model_name,
+            provider=provider
+        )
+        
+        self.generating_reviews.discard(timeframe_id)
+        if summary:
+            self.db.save_macro_summary(timeframe_id, timeframe_type, summary)
+            
+        self.call_from_thread(self.refresh_details_canvas)
+
+    @work(thread=True)
+    def bulk_generate_sessions_stories(self, timeframe_id: str, timeframe_type: str, sessions_to_summarize: List[Session]) -> None:
+        import time
+        provider = self.config.get("active_provider", "disabled")
+        if provider == "disabled":
+            return
+            
+        provider_config = self.config.get("providers", {}).get(provider, {})
+        api_key = provider_config.get("api_key", "")
+        api_base_url = provider_config.get("api_base_url", "")
+        model_name = provider_config.get("model_name", "")
+        
+        if provider in ("groq", "openai") and not api_key:
+            return
+            
+        total = len(sessions_to_summarize)
+        self.bulk_running_timeframes[timeframe_id] = (0, total)
+        self.call_from_thread(self.refresh_details_canvas)
+        
+        for idx, session in enumerate(sessions_to_summarize):
+            if self.config.get("active_provider", "disabled") == "disabled":
+                break
+                
+            session.is_generating_story = True
+            self.call_from_thread(self.refresh_details_canvas)
+            
+            project_map = {p.id: p for p in self.projects if p.id is not None}
+            proj = project_map.get(session.project_id)
+            proj_name = proj.name if proj else "Other"
+            if proj_name == "General / No Project":
+                proj_name = "Other"
+
+            commands = [cmd.command for cmd in session.commands]
+            summary = generate_ai_summary(
+                commands=commands,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                model_name=model_name,
+                provider=provider,
+                project_name=proj_name
+            )
+            
+            session.is_generating_story = False
+            if summary:
+                self.db.save_session_ai_summary(session.id, summary)
+                session.ai_summary = summary
+                if hasattr(session, "_cached_memory_str"):
+                    delattr(session, "_cached_memory_str")
+                
+                session.recent_generation = True
+                def clear_recent_bulk(s=session):
+                    s.recent_generation = False
+                    self.refresh_details_canvas()
+                self.call_from_thread(self.set_timer, 15.0, clear_recent_bulk)
+                
+                self.call_from_thread(self.update_session_ui, session.id, summary)
+                
+            self.bulk_running_timeframes[timeframe_id] = (idx + 1, total)
+            self.call_from_thread(self.refresh_details_canvas)
+            
+            if idx < total - 1:
+                time.sleep(2.0)
+                
+        self.bulk_running_timeframes.pop(timeframe_id, None)
+        self.call_from_thread(self.refresh_details_canvas)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.has_class("configure-ai-btn"):
+            # Re-open onboarding configuration screen
+            self.action_show_onboarding()
+            return
+            
+        button_id = event.button.id
+        if not button_id:
+            return
+        
+        if button_id.startswith("btn-gen-session-"):
+            session_id_str = button_id.replace("btn-gen-session-", "")
+            try:
+                session_id = int(session_id_str)
+                session = next((s for s in self.sessions if s.id == session_id), None)
+                if session:
+                    self.generate_single_session_story(session)
+            except ValueError:
+                pass
+        elif button_id.startswith("btn-exec-"):
+            parts = button_id.replace("btn-exec-", "").split("-")
+            if len(parts) >= 2:
+                timeframe_type = parts[-1]
+                timeframe_id = "-".join(parts[:-1])
+                stats_summary = getattr(self, "_temp_stats_summary", "")
+                self.generate_timeframe_executive_review(timeframe_id, timeframe_type, stats_summary)
+        elif button_id.startswith("btn-bulk-"):
+            parts = button_id.replace("btn-bulk-", "").split("-")
+            if len(parts) >= 2:
+                timeframe_type = parts[-1]
+                timeframe_id = "-".join(parts[:-1])
+                missing_sessions = []
+                if timeframe_type == "month":
+                    missing_sessions = [
+                        s for s in self.sessions 
+                        if s.date_str.startswith(timeframe_id) and not s.ai_summary
+                    ]
+                elif timeframe_type == "date":
+                    missing_sessions = [
+                        s for s in self.sessions 
+                        if s.date_str == timeframe_id and not s.ai_summary
+                    ]
+                if missing_sessions:
+                    self.bulk_generate_sessions_stories(timeframe_id, timeframe_type, missing_sessions)
+
+    def action_show_onboarding(self) -> None:
+        self.push_screen(OnboardingScreen(self.config), self.handle_onboarding_result)
+
     def action_quit_app(self) -> None:
         self.exit()
+        
+    def action_scroll_canvas_down(self) -> None:
+        self.query_one("#details-canvas").scroll_relative(y=3)
+        
+    def action_scroll_canvas_up(self) -> None:
+        self.query_one("#details-canvas").scroll_relative(y=-3)
+        
+    def action_scroll_canvas_page_down(self) -> None:
+        self.query_one("#details-canvas").scroll_relative(y=15)
+        
+    def action_scroll_canvas_page_up(self) -> None:
+        self.query_one("#details-canvas").scroll_relative(y=-15)
         
     def action_start_search(self) -> None:
         search_box = self.query_one("#search-box")
@@ -537,41 +1329,58 @@ class TermStoryWorkspace(App):
                 event.stop()
                 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Only handle submissions from the search box, not onboarding inputs
+        if event.input.id != "search-box":
+            return
         search_box = self.query_one("#search-box")
         search_box.styles.display = "none"
         self.query_one("#history-navigator").focus()
         
     def on_input_changed(self, event: Input.Changed) -> None:
+        # Only handle changes from the search box, not onboarding inputs
+        if event.input.id != "search-box":
+            return
         query = event.value.strip()
-        tree = self.query_one("#history-navigator")
-        tree.populate(self.projects, self.sessions, search_query=query)
+        # Debounce the search to avoid UI lag
+        self.debounce_search(query)
         
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        node_data = event.node.data
+        # Avoid handling selection while tree is being repopulated
+        if getattr(self, "_populating_tree", False):
+            return
+        self._show_node_details(event.node, animate=True)
+        
+    def _show_node_details(self, node, animate: bool = False) -> None:
+        node_data = node.data
         canvas = self.query_one("#details-canvas")
+        if animate:
+            canvas.styles.opacity = 0.0
+            
         if not node_data:
-            canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
+            canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
+            if animate:
+                canvas.styles.animate("opacity", 1.0, duration=0.15)
             return
             
         node_type = node_data.get("type")
         if node_type == "month":
             year = node_data["year"]
             month = node_data["month"]
-            matched = [s for s in self.sessions if datetime.fromtimestamp(s.start_time).year == year and datetime.fromtimestamp(s.start_time).month == month]
+            matched = [s for s in self.sessions if s.date_str.startswith(f"{year}-{month:02d}")]
             month_name = datetime(year, month, 1).strftime("%B %Y")
-            canvas.render_time_summary(f"📅 Monthly Overview ({month_name})", matched, self.projects)
+            canvas.render_time_summary(f"📅 Monthly Overview ({month_name})", matched, self.projects, timeframe_id=f"{year}-{month:02d}", timeframe_type="month")
             
         elif node_type == "date":
             date_str = node_data["date_str"]
-            matched = [s for s in self.sessions if datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") == date_str]
+            matched = [s for s in self.sessions if s.date_str == date_str]
             day_dt = datetime.strptime(date_str, "%Y-%m-%d")
             day_label = day_dt.strftime("%b %d (%a)")
-            canvas.render_time_summary(f"📅 Daily Overview ({day_label})", matched, self.projects)
+            canvas.render_time_summary(f"📅 Daily Overview ({day_label})", matched, self.projects, timeframe_id=date_str, timeframe_type="date")
             
         elif node_type == "project":
             project_id = node_data["project_id"]
             date_str = node_data["date_str"]
-            matched = [s for s in self.sessions if datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") == date_str and s.project_id == project_id]
+            matched = [s for s in self.sessions if s.date_str == date_str and s.project_id == project_id]
             
             project_map = {p.id: p for p in self.projects if p.id is not None}
             proj = project_map.get(project_id)
@@ -580,7 +1389,7 @@ class TermStoryWorkspace(App):
                 proj_name = "Other"
             day_dt = datetime.strptime(date_str, "%Y-%m-%d")
             day_label = day_dt.strftime("%b %d (%a)")
-            canvas.render_time_summary(f"📁 {proj_name} on {day_label}", matched, self.projects)
+            canvas.render_time_summary(f"📁 {proj_name} on {day_label}", matched, self.projects, timeframe_id=f"{project_id}_{date_str}", timeframe_type="project_date")
             
         elif node_type == "session":
             session_id = node_data["session_id"]
@@ -592,3 +1401,6 @@ class TermStoryWorkspace(App):
                 canvas.render_session_details(proj, session)
             else:
                 canvas.update_view_empty()
+                
+        if animate:
+            canvas.styles.animate("opacity", 1.0, duration=0.15)

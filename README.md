@@ -54,7 +54,7 @@ You remember:
 Oh yeah — that was when I fixed the HugeGraph Docker supervision issue.
 ```
 
-TermStory surfaces **memories** (commits, meaningful commands), filters **noise** (`cd`, `ls`, `docker ps`, `git status`), and collapses results to **one line per day per project**.
+TermStory surfaces **memories** (commits, meaningful commands, or AI-generated stories), filters **noise** (`cd`, `ls`, `docker ps`, `git status`), and collapses results to **one line per day per project**.
 
 Default output answers: *"What work did I do?"*
 `--detailed` output answers: *"How do you know?"*
@@ -66,11 +66,12 @@ Default output answers: *"What work did I do?"*
 - 🔍 **Memory-First Search** — Search across commands, commits, and projects. Noise is filtered, commits are prioritized, results are collapsed by day. One screen, not a wall of text.
 - 📁 **Project Detection** — Extracts working directories from `cd` commands. Finds Git/Mercurial/SVN roots and project config files (`pom.xml`, `package.json`, etc.). Humanizes names (`incubator-hugegraph` → `Apache HugeGraph`).
 - ⏱️ **Session Grouping** — Clusters commands into sessions based on 30-minute activity gaps.
-- 💬 **Git Commit Integration** — Maps local Git commits to active sessions using timestamp windowing (5-minute pre-buffer, 10-minute post-buffer). Cleans commit messages by stripping emojis, JIRA codes, conventional prefixes (`feat:`, `fix:`), and PR references.
+- 💬 **Git Commit Integration** — Maps local Git commits to active sessions using timestamp windowing. Cleans commit messages by stripping emojis, JIRA codes, and conventional prefixes (`feat:`, `fix:`).
 - 💡 **Developer Insights** — Focus scores, project time splits, hourly/daily work distribution, and pattern detection.
 - 📋 **Daily / Weekly / Monthly Summaries** — Structured breakdowns of where your time went.
-- 💻 **Interactive TUI Dashboard** — Live terminal user interface featuring a timeline tree explorer, dynamic search/filter, top statistics panel with a GitHub-style activity heatmap, and a detailed session inspector.
-- 🔒 **100% Local & Private** — Everything stored in a local SQLite database (`~/.termstory/termstory.db`). No network calls. No telemetry.
+- 💻 **Interactive TUI Dashboard** — Live terminal user interface featuring a timeline tree explorer, dynamic search/filter, top statistics panel with a GitHub-style activity heatmap, and a detailed session inspector (defaults to 90 days of history).
+- 🤖 **On-Demand AI & Privacy Architecture** — Optional AI categorizations powered by Groq, OpenAI, Ollama, or Custom endpoints. Generates "Executive Summaries" of your week/month and "Session Stories". Protected by a strict `sanitizer` pipeline that drops authentication commands and redacts passwords/IPs/FQDNs locally before any data leaves your machine. 
+- 🔒 **100% Local & Private by Default** — Everything stored in a local SQLite database (`~/.termstory/termstory.db`). AI is strictly opt-in and configurable.
 
 ---
 
@@ -116,8 +117,7 @@ termstory search docker --since 2026-05-01
 termstory search docker --limit 20
 ```
 
-Default mode shows **memories** (commit messages, meaningful commands), grouped by project, one per day.
-`--detailed` mode shows full session inspection with timestamps, durations, and all matched commands/commits.
+Default mode shows **memories** (commit messages, AI stories, meaningful commands), grouped by project, one per day.
 
 ### `termstory week`
 
@@ -127,7 +127,6 @@ Weekly work report with day-by-day breakdown.
 termstory week
 termstory week --last             # last week
 termstory week --project huge     # filter by project
-termstory week --detailed
 ```
 
 ### `termstory month`
@@ -138,7 +137,6 @@ Monthly summary — logged days, project time, averages.
 termstory month
 termstory month "May 2026"    # specific month
 termstory month --last        # last month
-termstory month --detailed
 ```
 
 ### `termstory project <name>`
@@ -150,7 +148,6 @@ termstory project hugegraph
 termstory project hugegraph --files     # files you edited
 termstory project hugegraph --stats     # command breakdown
 termstory project hugegraph --since 2026-04-01
-termstory project hugegraph --last-week
 ```
 
 ### `termstory projects`
@@ -178,8 +175,8 @@ termstory insights --days 90    # analyze last 90 days
 Launch the interactive Terminal User Interface (TUI) dashboard.
 
 ```bash
-termstory ui
-termstory ui --days 90        # display last 90 days of history
+termstory ui                  # display last 90 days of history (default)
+termstory ui --days 30        # display last 30 days
 termstory ui --all            # display all recorded history
 ```
 
@@ -188,7 +185,20 @@ termstory ui --all            # display all recorded history
 - `Enter` / `Space`: Toggle nodes (expand/collapse)
 - `/`: Open dynamic search/filter input
 - `Esc` (inside search): Close search and clear filter
+- `o`: Open AI Configuration Onboarding Screen
 - `q` / `Esc` (inside tree): Exit dashboard
+- `Ctrl+Up` / `Ctrl+Down` (or PgUp/PgDn): Scroll Details panel
+
+### `termstory config`
+
+Manage TermStory configuration and AI provider settings.
+
+```bash
+termstory config list         # list all configuration values
+termstory config set active_provider ollama
+termstory config set providers.groq.api_key "your-key"
+termstory config get ai_enabled
+```
 
 ### Date Override
 
@@ -196,7 +206,6 @@ Query any date:
 
 ```bash
 termstory 2026-05-15              # summary for May 15th
-termstory --date 2026-05-15       # same thing
 termstory --date 2026-05-15 week  # week containing May 15th
 ```
 
@@ -217,7 +226,9 @@ Shell History Files (zsh/bash)
         ↓
     SQLite Cache (database.py)        — ~/.termstory/termstory.db
         ↓
-    Memory Extraction (formatter.py)  — noise filtering, day collapsing
+    AI Sanitizer (sanitizer.py)       — drops passwords, IPs, auth tokens
+        ↓
+    Memory Extraction (formatter.py / ai.py)
         ↓
     Rich Terminal Output / Interactive TUI (cli.py / tui.py)
 ```
@@ -228,15 +239,17 @@ Shell History Files (zsh/bash)
 
 | Module | Purpose |
 |---|---|
-| `config.py` | Shell detection, history file paths, database path |
+| `config.py` | Configuration manager, provider setup, path resolution |
 | `parser.py` | Parse zsh/bash history files into command records |
 | `session.py` | Group commands into sessions by time gaps |
 | `project.py` | Detect project roots, humanize names, disambiguate |
 | `git_integration.py` | Fetch and clean Git commits via subprocess |
-| `database.py` | SQLite storage with WAL mode, indexed timestamp queries |
+| `database.py` | SQLite storage with WAL mode, timestamp indices, AI caches |
+| `sanitizer.py` | Redact sensitive command arguments and drop authentication vectors |
+| `ai.py` | Zero-dependency API client, system prompts, few-shot generation |
 | `insights.py` | Focus scoring, time-of-day/day-of-week analysis, patterns |
-| `formatter.py` | Rich-based terminal rendering, noise filtering, memory extraction |
-| `tui.py` | Interactive TUI dashboard built with Textual framework |
+| `formatter.py` | Rich-based terminal rendering, noise filtering, memory heuristics |
+| `tui.py` | Interactive asynchronous TUI dashboard built with Textual |
 | `cli.py` | Typer CLI, ingestion orchestration, command routing |
 
 ---
@@ -247,7 +260,7 @@ Shell History Files (zsh/bash)
 pytest tests/
 ```
 
-42 tests covering parsing, sessions, project detection, git integration, database queries, search, formatting, insights, TUI dashboard, and CLI commands.
+**72 tests** covering parsing, sessions, project detection, git integration, database queries, search, formatting, insights, TUI dashboard features, API networking, and the privacy sanitizer pipeline.
 
 ---
 

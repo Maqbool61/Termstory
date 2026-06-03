@@ -396,7 +396,7 @@ def show_insights(
 
 @app.command("ui")
 def show_ui(
-    days: int = typer.Option(30, "--days", help="Number of days of history to display"),
+    days: int = typer.Option(90, "--days", help="Number of days of history to display"),
     all_history: bool = typer.Option(False, "--all", help="Display all recorded history"),
 ):
     """Launch the interactive terminal dashboard user interface"""
@@ -409,6 +409,77 @@ def show_ui(
     from termstory.tui import TermStoryWorkspace
     app_tui = TermStoryWorkspace(db, days_limit=None if all_history else days)
     app_tui.run()
+
+
+# ==========================================
+# CONFIG SUBCOMMANDS
+# ==========================================
+
+config_app = typer.Typer(help="Manage TermStory configuration settings")
+
+@config_app.command("set")
+def config_set(key: str, value: str):
+    """Set a configuration value (supports nested dot notation, e.g. providers.openai.api_key)"""
+    from termstory.config import load_config, save_config, set_config_value, get_config_value
+    config = load_config()
+    
+    # Type conversion for booleans
+    if key in ("ai_enabled", "has_seen_onboarding") or key.endswith(".ai_enabled") or key.endswith(".has_seen_onboarding"):
+        converted_value = value.lower() in ("true", "1", "yes")
+    else:
+        converted_value = value
+        
+    set_config_value(config, key, converted_value)
+    save_config(config)
+    
+    set_val = get_config_value(config, key)
+    console.print(f"[green]Set config key '{key}' to '{set_val}'[/]")
+
+@config_app.command("get")
+def config_get(key: str):
+    """Get a configuration value (supports nested dot notation)"""
+    from termstory.config import load_config, get_config_value
+    config = load_config()
+    val = get_config_value(config, key)
+    if val is not None:
+        console.print(f"{val}")
+    else:
+        Console(stderr=True).print(f"[bold red]Error: Config key '{key}' not found[/]")
+        raise typer.Exit(code=1)
+
+@config_app.command("list")
+def config_list():
+    """List all current configuration values, flattening nested paths"""
+    from termstory.config import load_config
+    config = load_config()
+    
+    def flatten_dict(d: dict, prefix: str = "") -> list:
+        items = []
+        for k, v in d.items():
+            new_key = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                items.extend(flatten_dict(v, new_key))
+            else:
+                items.append((new_key, v))
+        return items
+
+    flat_config = flatten_dict(config)
+    
+    from rich.box import ROUNDED
+    table = Table(title="🔧 TermStory Configuration", box=ROUNDED, border_style="cyan")
+    table.add_column("Key", style="cyan bold")
+    table.add_column("Value", style="green")
+    
+    for k, v in sorted(flat_config):
+        val_str = str(v)
+        # Mask keys that represent an API key
+        if ("api_key" in k.lower() or "api-key" in k.lower()) and v:
+            val_str = v[:6] + "..." + v[-4:] if len(v) > 10 else "[SET]"
+        table.add_row(k, val_str)
+        
+    console.print(table)
+
+app.add_typer(config_app, name="config")
 
 
 @app.callback(invoke_without_command=True)
