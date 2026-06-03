@@ -1,4 +1,5 @@
 import os
+import re
 import shlex
 import calendar
 from collections import Counter, defaultdict
@@ -170,9 +171,10 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
                 candidates = [cmd.command for cmd in s.commands if not _is_noise_command(cmd.command)]
                 if candidates:
                     best_cmd = max(candidates, key=len)
-                    if best_cmd not in seen_memories:
-                        seen_memories.add(best_cmd)
-                        bullet_lines.append(f"• {best_cmd}")
+                    cleaned = clean_command_to_memory(best_cmd)
+                    if cleaned not in seen_memories:
+                        seen_memories.add(cleaned)
+                        bullet_lines.append(f"• {cleaned}")
                 else:
                     # 3. Fallback: raw commands
                     raw_cmds = []
@@ -180,9 +182,10 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
                         if not raw_cmds or raw_cmds[-1] != cmd.command:
                             raw_cmds.append(cmd.command)
                     for cmd in raw_cmds:
-                        if cmd not in seen_memories:
-                            seen_memories.add(cmd)
-                            bullet_lines.append(f"• {cmd}")
+                        cleaned = clean_command_to_memory(cmd)
+                        if cleaned not in seen_memories:
+                            seen_memories.add(cleaned)
+                            bullet_lines.append(f"• {cleaned}")
                             
         for line in bullet_lines:
             output_lines.append(line)
@@ -422,9 +425,10 @@ def format_project_output(sessions: List[Session], project: Project) -> str:
                 candidates = [cmd.command for cmd in s.commands if not _is_noise_command(cmd.command)]
                 if candidates:
                     best_cmd = max(candidates, key=len)
-                    if best_cmd not in seen_memories:
-                        seen_memories.add(best_cmd)
-                        day_memories.append(best_cmd)
+                    cleaned = clean_command_to_memory(best_cmd)
+                    if cleaned not in seen_memories:
+                        seen_memories.add(cleaned)
+                        day_memories.append(cleaned)
                 else:
                     # 3. Fallback: raw commands
                     raw_cmds = []
@@ -432,9 +436,10 @@ def format_project_output(sessions: List[Session], project: Project) -> str:
                         if not raw_cmds or raw_cmds[-1] != cmd.command:
                             raw_cmds.append(cmd.command)
                     for cmd in raw_cmds:
-                        if cmd not in seen_memories:
-                            seen_memories.add(cmd)
-                            day_memories.append(cmd)
+                        cleaned = clean_command_to_memory(cmd)
+                        if cleaned not in seen_memories:
+                            seen_memories.add(cleaned)
+                            day_memories.append(cleaned)
 
         if not day_memories:
             continue
@@ -592,6 +597,87 @@ def _is_noise_command(cmd: str) -> bool:
         return True
     return False
 
+def split_command_chain(cmd_str: str) -> List[str]:
+    """Split a command chain on '&&' or ';' without breaking inside quoted strings."""
+    parts = []
+    current = []
+    in_single_quote = False
+    in_double_quote = False
+    escaped = False
+    i = 0
+    n = len(cmd_str)
+    while i < n:
+        char = cmd_str[i]
+        if escaped:
+            current.append(char)
+            escaped = False
+            i += 1
+            continue
+        if char == '\\':
+            escaped = True
+            current.append(char)
+            i += 1
+            continue
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            current.append(char)
+        elif char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current.append(char)
+        elif not in_single_quote and not in_double_quote:
+            if char == ';':
+                parts.append("".join(current).strip())
+                current = []
+            elif char == '&' and i + 1 < n and cmd_str[i+1] == '&':
+                parts.append("".join(current).strip())
+                current = []
+                i += 2
+                continue
+            else:
+                current.append(char)
+        else:
+            current.append(char)
+        i += 1
+    if current:
+        parts.append("".join(current).strip())
+    return [p for p in parts if p]
+
+def clean_command_to_memory(cmd_str: str) -> str:
+    """Extract a clean memory string from a command.
+    Specifically, if it is a git commit command, extract the commit message.
+    Otherwise, if it's a long command chain, clean/truncate it or humanize it."""
+    # 1. Match git commit messages (quoted and unquoted, supporting flags like -m, -am, -sm, -asm, --message)
+    commit_match = re.search(r'(?:-a?s?m|--message)(?:\s+|=)["\']([^"\']+)["\']', cmd_str)
+    if commit_match:
+        return commit_match.group(1).strip()
+        
+    commit_match_unquoted = re.search(r'(?:-a?s?m|--message)(?:\s+|=)([^\s"\']+)', cmd_str)
+    if commit_match_unquoted:
+        return commit_match_unquoted.group(1).strip()
+        
+    # 2. Humanize common git commands
+    if cmd_str.strip().startswith("git "):
+        checkout_b = re.search(r'checkout\s+-b\s+(\S+)', cmd_str)
+        if checkout_b:
+            return f"Create branch {checkout_b.group(1)}"
+        checkout = re.search(r'checkout\s+(\S+)', cmd_str)
+        if checkout:
+            return f"Switch to branch {checkout.group(1)}"
+        if "push" in cmd_str:
+            return "Push changes to remote"
+        if "pull" in cmd_str:
+            return "Pull latest changes"
+            
+    # 3. Clean newlines and split chains using quote-aware tokenizer
+    clean = cmd_str.replace("\n", " ").strip()
+    parts = split_command_chain(clean)
+    if len(parts) > 1:
+        meaningful = [p for p in parts if not _is_noise_command(p)]
+        if meaningful:
+            return clean_command_to_memory(meaningful[-1])
+            
+    return clean
+
 def _get_session_memory(result: Dict) -> Optional[Tuple[int, str, bool]]:
     """Extract the single best 'memory' from a search result session.
     Priority: matching commits > non-noise matching commands > non-noise commands.
@@ -607,17 +693,17 @@ def _get_session_memory(result: Dict) -> Optional[Tuple[int, str, bool]]:
     if result.get("matching_commands"):
         candidates = [cmd for cmd in result["matching_commands"] if not _is_noise_command(cmd)]
         if candidates:
-            return (ts, max(candidates, key=len), False)
+            return (ts, clean_command_to_memory(max(candidates, key=len)), False)
 
     # Priority 3: Non-noise any commands
     if result.get("all_commands"):
         candidates = [cmd for cmd in result["all_commands"] if not _is_noise_command(cmd)]
         if candidates:
-            return (ts, max(candidates, key=len), False)
+            return (ts, clean_command_to_memory(max(candidates, key=len)), False)
 
     # Priority 4: Fallback to longest raw command if all else is noise (memory extraction fails)
     if result.get("all_commands"):
-        return (ts, max(result["all_commands"], key=len), False)
+        return (ts, clean_command_to_memory(max(result["all_commands"], key=len)), False)
 
     # Nothing meaningful in this session
     return None
@@ -780,7 +866,7 @@ def _get_project_main_achievement(sessions: List[Session]) -> Tuple[str, str]:
             # Pick the longest/most descriptive command from the session
             best_cmd = max(candidates, key=lambda c: len(c.command))
             date_str = datetime.fromtimestamp(best_cmd.timestamp).strftime("%b %d")
-            return best_cmd.command, date_str
+            return clean_command_to_memory(best_cmd.command), date_str
             
     # If all else fails, fall back to the most recent raw command
     for s in sorted_sessions:
@@ -790,7 +876,7 @@ def _get_project_main_achievement(sessions: List[Session]) -> Tuple[str, str]:
             if sorted_cmds:
                 cmd = sorted_cmds[0]
                 date_str = datetime.fromtimestamp(cmd.timestamp).strftime("%b %d")
-                return cmd.command, date_str
+                return clean_command_to_memory(cmd.command), date_str
                 
     return "No activity logged", ""
 

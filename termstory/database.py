@@ -81,8 +81,32 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON commits(timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_project_id ON commits(project_id);")
         
+        # Prune legacy duplicate sessions that became orphaned (have no commands)
+        cursor.execute("""
+            DELETE FROM sessions 
+            WHERE id NOT IN (SELECT DISTINCT session_id FROM commands WHERE session_id IS NOT NULL);
+        """)
+        
+        # Add ai_summary column to sessions if not exists
+        try:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN ai_summary TEXT;")
+        except sqlite3.OperationalError:
+            pass
+            
+        # Create macro_summaries table if not exists
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS macro_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timeframe_id TEXT NOT NULL UNIQUE,
+            type TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            created_at INTEGER DEFAULT (strftime('%s', 'now'))
+        );
+        """)
+            
         conn.commit()
         conn.close()
+
 
     def save_data(self, projects: List[Project], sessions: List[Session], commands: List[Command]) -> None:
         """Optimized bulk insertion and updating of projects, sessions, and commands in a single transaction"""
@@ -159,20 +183,24 @@ class Database:
                     
             # --- 2. Save Sessions ---
             cursor.execute("SELECT id, start_time, end_time, duration_seconds, project_id FROM sessions")
-            db_sessions = {(row[1], row[2]): {"id": row[0], "duration": row[3], "project_id": row[4]} for row in cursor.fetchall()}
+            db_sessions = {}
+            for row in cursor.fetchall():
+                key = (row[1], row[4])
+                # If there are duplicate legacy sessions, prefer the one with the latest end_time
+                if key not in db_sessions or row[2] > db_sessions[key]["end_time"]:
+                    db_sessions[key] = {"id": row[0], "end_time": row[2], "duration": row[3]}
             
             session_id_map = {}
             
             for session in sessions:
                 temp_id = session.id
-                key = (session.start_time, session.end_time)
+                key = (session.start_time, session.project_id)
                 if key in db_sessions:
                     db_id = db_sessions[key]["id"]
-                    # Update if changed
-                    if db_sessions[key]["duration"] != session.duration_seconds or db_sessions[key]["project_id"] != session.project_id:
-                        cursor.execute("""
-                            UPDATE sessions SET duration_seconds = ?, project_id = ? WHERE id = ?
-                        """, (session.duration_seconds, session.project_id, db_id))
+                    # Update end_time and duration as the session grows
+                    cursor.execute("""
+                        UPDATE sessions SET end_time = ?, duration_seconds = ?, project_id = ? WHERE id = ?
+                    """, (session.end_time, session.duration_seconds, session.project_id, db_id))
                     session.id = db_id
                 else:
                     cursor.execute("""
@@ -245,7 +273,7 @@ class Database:
         
         # 1. Fetch sessions starting today
         cursor.execute("""
-            SELECT id, start_time, end_time, duration_seconds, project_id
+            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
             FROM sessions
             WHERE start_time >= ? AND start_time <= ?
             ORDER BY start_time ASC
@@ -254,7 +282,8 @@ class Database:
         
         sessions = []
         for row in session_rows:
-            s_id, start, end, duration, p_id = row
+            s_id, start, end, duration, p_id, ai_sum = row
+
             
             # 2. Fetch all commands for this session
             cursor.execute("""
@@ -301,8 +330,10 @@ class Database:
                 duration_seconds=duration,
                 project_id=p_id,
                 commands=commands,
-                commits=commits
+                commits=commits,
+                ai_summary=ai_sum
             ))
+
             
         conn.close()
         return sessions
@@ -353,7 +384,7 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT id, start_time, end_time, duration_seconds, project_id
+            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
             FROM sessions
             WHERE start_time >= ? AND start_time <= ?
             ORDER BY start_time ASC
@@ -362,7 +393,8 @@ class Database:
         
         sessions = []
         for row in session_rows:
-            s_id, start, end, duration, p_id = row
+            s_id, start, end, duration, p_id, ai_sum = row
+
             
             cursor.execute("""
                 SELECT id, timestamp, command, exit_code, session_id, project_id
@@ -408,8 +440,10 @@ class Database:
                 duration_seconds=duration,
                 project_id=p_id,
                 commands=commands,
-                commits=commits
+                commits=commits,
+                ai_summary=ai_sum
             ))
+
             
         conn.close()
         return sessions
@@ -420,7 +454,7 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT id, start_time, end_time, duration_seconds, project_id
+            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
             FROM sessions
             WHERE project_id = ? AND start_time >= ?
             ORDER BY start_time ASC
@@ -429,7 +463,8 @@ class Database:
         
         sessions = []
         for row in session_rows:
-            s_id, start, end, duration, p_id = row
+            s_id, start, end, duration, p_id, ai_sum = row
+
             
             cursor.execute("""
                 SELECT id, timestamp, command, exit_code, session_id, project_id
@@ -475,11 +510,57 @@ class Database:
                 duration_seconds=duration,
                 project_id=p_id,
                 commands=commands,
-                commits=commits
+                commits=commits,
+                ai_summary=ai_sum
             ))
             
         conn.close()
         return sessions
+
+    def save_session_ai_summary(self, session_id: int, ai_summary: str) -> None:
+        """Update a session's AI-generated summary in the database"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE sessions SET ai_summary = ? WHERE id = ?
+            """, (ai_summary, session_id))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
+    def get_macro_summary(self, timeframe_id: str) -> Optional[str]:
+        """Fetch cached macro summary (executive review) for a given timeframe"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT summary FROM macro_summaries WHERE timeframe_id = ?
+        """, (timeframe_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+
+    def save_macro_summary(self, timeframe_id: str, type_str: str, summary: str) -> None:
+        """Cache macro summary (executive review) in the database"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            # Delete first to ensure SQLite version compatibility without UPSERT (ON CONFLICT)
+            cursor.execute("DELETE FROM macro_summaries WHERE timeframe_id = ?", (timeframe_id,))
+            cursor.execute("""
+                INSERT INTO macro_summaries (timeframe_id, type, summary)
+                VALUES (?, ?, ?)
+            """, (timeframe_id, type_str, summary))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+
 
     def get_all_projects_with_stats(self) -> List[Project]:
         """Get all projects from database, joining with sessions to aggregate statistics"""

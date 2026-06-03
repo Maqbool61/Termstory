@@ -1,0 +1,120 @@
+import re
+from typing import List, Tuple, Optional
+
+# Blacklist patterns - if a command matches any of these, the entire session is dropped from AI
+BLACKLIST_PATTERNS = [
+    re.compile(r'\bvault\b', re.IGNORECASE),
+    re.compile(r'\baws\s+configure\b', re.IGNORECASE),
+    re.compile(r'\bgh\s+auth\b', re.IGNORECASE),
+    re.compile(r'\bkubectl\s+.*?\bcreate\s+secret\b', re.IGNORECASE)
+]
+
+# Hardcoded redaction patterns
+ENV_EXPORT_PATTERN = re.compile(r'(export\s+[A-Za-z0-9_]+=)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")', re.IGNORECASE)
+HIGH_RISK_ENV_PATTERN = re.compile(r'\b([A-Za-z0-9_]*(?:pass|key|secret|token|auth|cred)[A-Za-z0-9_]*)=(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")', re.IGNORECASE)
+
+PASSWORD_FLAG_PATTERN = re.compile(
+    r'(--password=|\b--password\s+|\b--pass=|\b--pass\s+|--token=|--token\s+|--api-key=|--api-key\s+|(?<!-)-p\s*)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
+    re.IGNORECASE
+)
+
+IP_ADDRESS_PATTERN = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+
+# Common programming file extensions to exclude from FQDN redaction
+FILE_EXTENSIONS = {
+    'py', 'json', 'db', 'sh', 'xml', 'yml', 'yaml', 'md', 'txt', 'c', 'cpp',
+    'h', 'go', 'java', 'js', 'ts', 'html', 'css', 'sqlite', 'sqlite3', 'rs',
+    'toml', 'lock', 'sql', 'cfg', 'ini', 'git', 'egg-info', 'class', 'jar',
+    'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'tar', 'gz', 'log', 'out'
+}
+
+# Match standard FQDNs (e.g. host.domain.com)
+FQDN_PATTERN = re.compile(r'\b([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)\b')
+
+# Match URL hosts: e.g. http://api, https://myhost
+URL_HOST_PATTERN = re.compile(r'\b(https?|ftp|ssh)://([a-zA-Z0-9-.]+)\b', re.IGNORECASE)
+# Match SSH connection-like hosts: e.g. admin@host
+SSH_HOST_PATTERN = re.compile(r'\b([a-zA-Z0-9_.-]+)@([a-zA-Z0-9-.]+)\b')
+
+# Standard secrets patterns (AWS access keys, slack tokens, bearer tokens, etc.)
+AWS_KEY_PATTERN = re.compile(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b')
+SLACK_TOKEN_PATTERN = re.compile(r'\bxoxb-[0-9]{11,13}-[a-zA-Z0-9]{24}\b')
+BEARER_TOKEN_PATTERN = re.compile(r'\bbearer\s+([a-zA-Z0-9\-._~+/]+=*)\b', re.IGNORECASE)
+SSH_PRIVATE_KEY_PATTERN = re.compile(r'-----BEGIN\s+[A-Z ]+\s+PRIVATE\s+KEY-----.*?-----END\s+[A-Z ]+\s+PRIVATE\s+KEY-----', re.DOTALL | re.IGNORECASE)
+
+def should_blacklist_command(cmd: str) -> bool:
+    """Check if the command is blacklisted from AI processing"""
+    return any(pattern.search(cmd) for pattern in BLACKLIST_PATTERNS)
+
+def redact_command(cmd: str) -> str:
+    """Sanitize and redact secrets from a command string"""
+    # 1. SSH Private Keys
+    cmd = SSH_PRIVATE_KEY_PATTERN.sub('[REDACTED_PRIVATE_KEY]', cmd)
+    
+    # 2. AWS Keys & Slack Tokens
+    cmd = AWS_KEY_PATTERN.sub('[REDACTED_AWS_KEY]', cmd)
+    cmd = SLACK_TOKEN_PATTERN.sub('[REDACTED_SLACK_TOKEN]', cmd)
+    cmd = BEARER_TOKEN_PATTERN.sub('Bearer [REDACTED_TOKEN]', cmd)
+    
+    # 3. Environment Variable Exports & High-risk Inline Env Vars
+    cmd = ENV_EXPORT_PATTERN.sub(r'\1[REDACTED]', cmd)
+    cmd = HIGH_RISK_ENV_PATTERN.sub(r'\1=[REDACTED]', cmd)
+    
+    # 4. Password and Secret flags
+    cmd = PASSWORD_FLAG_PATTERN.sub(r'\1[REDACTED]', cmd)
+    
+    # 5. IP Addresses
+    cmd = IP_ADDRESS_PATTERN.sub('[REDACTED_IP]', cmd)
+    
+    # 6. FQDNs (excluding files)
+    def fqdn_replacer(match):
+        full_match = match.group(1)
+        parts = full_match.split('.')
+        ext = parts[-1].lower()
+        if ext in FILE_EXTENSIONS:
+            # Keep as-is, looks like a source/config file
+            return full_match
+        return '[REDACTED_HOST]'
+        
+    cmd = FQDN_PATTERN.sub(fqdn_replacer, cmd)
+    
+    # 7. URL Hosts
+    def url_replacer(match):
+        proto = match.group(1)
+        host = match.group(2)
+        if host == '[REDACTED_IP]' or host == '[REDACTED_HOST]':
+            return f"{proto}://{host}"
+        parts = host.split('.')
+        ext = parts[-1].lower()
+        if len(parts) > 1 and ext in FILE_EXTENSIONS:
+            return f"{proto}://{host}"
+        return f"{proto}://[REDACTED_HOST]"
+        
+    cmd = URL_HOST_PATTERN.sub(url_replacer, cmd)
+
+    # 8. SSH User@Host
+    def ssh_replacer(match):
+        user = match.group(1)
+        host = match.group(2)
+        if host == '[REDACTED_IP]' or host == '[REDACTED_HOST]':
+            return f"{user}@{host}"
+        parts = host.split('.')
+        ext = parts[-1].lower()
+        if len(parts) > 1 and ext in FILE_EXTENSIONS:
+            return f"{user}@{host}"
+        return f"{user}@[REDACTED_HOST]"
+        
+    cmd = SSH_HOST_PATTERN.sub(ssh_replacer, cmd)
+    
+    return cmd
+
+def sanitize_session_commands(commands: List[str]) -> Tuple[Optional[List[str]], bool]:
+    """Sanitize a list of commands for a session.
+    Returns (sanitized_commands, is_blacklisted).
+    If is_blacklisted is True, sanitized_commands will be None."""
+    for cmd in commands:
+        if should_blacklist_command(cmd):
+            return None, True
+            
+    sanitized = [redact_command(cmd) for cmd in commands]
+    return sanitized, False

@@ -28,7 +28,7 @@ def test_cli_today_workflow(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "Today" in result.stdout
     assert "Apache HugeGraph" in result.stdout
-    assert "git commit" in result.stdout.lower()
+    assert "fix integration test" in result.stdout.lower()
     assert "docker compose" in result.stdout.lower()
     
     # Check that database has the records populated

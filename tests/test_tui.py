@@ -230,6 +230,7 @@ async def test_tui_update_stats_header():
             # Active and idle
             app.update_stats_header()
             assert "AI: ACTIVE (GROQ)" in str(stats_panel.render())
+            assert "Activity (Last 30 Days):" in str(stats_panel.render())
             
             # Active and summarizing
             app.ai_summarizing = True
@@ -382,11 +383,11 @@ async def test_tui_generate_executive_review(monkeypatch):
         )
         
         called = []
-        def mock_generate_executive_review(stats_summary, api_key, api_base_url, model_name, provider):
+        def mock_generate_timeframe_summary(stats_summary, api_key, api_base_url, model_name, provider):
             called.append(stats_summary)
             return "Generated Executive Review text."
             
-        monkeypatch.setattr("termstory.tui.generate_executive_review", mock_generate_executive_review)
+        monkeypatch.setattr("termstory.ai.generate_timeframe_summary", mock_generate_timeframe_summary)
         
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -452,5 +453,105 @@ async def test_tui_bulk_auto_summarize(monkeypatch):
             assert app.sessions[0].ai_summary == "Bulk summary output"
 
 
+@pytest.mark.asyncio
+async def test_tui_help_screen():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": False, 
+            }
+        )
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Help screen is not showing initially
+            assert not any(screen.__class__.__name__ == "HelpScreen" for screen in app.screen_stack)
+            
+            # Press ?
+            await pilot.press("?")
+            await pilot.pause()
+            
+            # Help screen should be showing now
+            from termstory.tui import HelpScreen
+            help_screen = app.screen
+            assert isinstance(help_screen, HelpScreen)
+            
+            # Dismiss using close button
+            help_screen.query_one("#btn-close-help").press()
+            await pilot.pause()
+            
+            # Help screen should be dismissed
+            assert not isinstance(app.screen, HelpScreen)
+            
+            # Open it again
+            await pilot.press("?")
+            await pilot.pause()
+            help_screen = app.screen
+            assert isinstance(help_screen, HelpScreen)
+            
+            # Dismiss using ESC key
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+
+            # Open it again
+            await pilot.press("?")
+            await pilot.pause()
+            help_screen = app.screen
+            assert isinstance(help_screen, HelpScreen)
+            
+            # Dismiss using q key
+            await pilot.press("q")
+            await pilot.pause()
+            assert not isinstance(app.screen, HelpScreen)
+
+
+def test_tui_copy_to_clipboard(monkeypatch):
+    from termstory.database import Database
+    from termstory.tui import TermStoryWorkspace
+    import subprocess
+    from textual.app import App
+    
+    db = Database(":memory:")
+    db.init_db()
+    
+    app = TermStoryWorkspace(
+        db, 
+        days_limit=30, 
+        config_override={"has_seen_onboarding": True, "ai_enabled": False}
+    )
+    
+    copied_texts = []
+    
+    class MockProcess:
+        def __init__(self):
+            self.returncode = 0
+        def communicate(self, input):
+            copied_texts.append(input.decode('utf-8'))
+            return (b'', b'')
+            
+    def mock_popen(*args, **kwargs):
+        return MockProcess()
+        
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    
+    parent_called = []
+    def mock_parent_copy(self, text):
+        parent_called.append(text)
+        
+    monkeypatch.setattr(App, "copy_to_clipboard", mock_parent_copy)
+    
+    app.copy_to_clipboard("test-copy-text")
+    
+    assert "test-copy-text" in copied_texts
+    assert "test-copy-text" in parent_called
 
 

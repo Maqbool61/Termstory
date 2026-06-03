@@ -15,6 +15,7 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Header, Footer, Tree, Static, Input, Button
 from textual.screen import ModalScreen
 from textual.reactive import reactive
+from textual.binding import Binding
 
 from termstory.models import Session, Project, Command, format_duration
 from termstory.database import Database
@@ -22,7 +23,7 @@ from termstory.project import disambiguate_project_names
 from termstory.formatter import _is_noise_command, clean_command_to_memory
 from termstory.date_utils import get_current_time
 from termstory.config import load_config, save_config
-from termstory.ai import generate_ai_summary, generate_executive_review
+from termstory.ai import generate_ai_summary, generate_timeframe_summary
 
 
 # ==========================================
@@ -82,7 +83,7 @@ def generate_heatmap(sessions: List[Session], days_limit: int = 30) -> str:
     return " ".join(heatmap_blocks)
 
 
-def calculate_dashboard_stats(sessions: List[Session], projects: List[Project]) -> Dict[str, Any]:
+def calculate_dashboard_stats(sessions: List[Session], projects: List[Project], days_limit: int = 30) -> Dict[str, Any]:
     """Calculate cumulative dashboard stats."""
     active_dates = {
         datetime.fromtimestamp(s.start_time).date()
@@ -92,7 +93,7 @@ def calculate_dashboard_stats(sessions: List[Session], projects: List[Project]) 
     streak = calculate_streak(sessions)
     total_seconds = sum(s.duration_seconds for s in sessions)
     total_time_str = format_duration(total_seconds)
-    heatmap = generate_heatmap(sessions)
+    heatmap = generate_heatmap(sessions, days_limit=days_limit)
     
     return {
         "total_time": total_time_str,
@@ -106,7 +107,6 @@ def calculate_dashboard_stats(sessions: List[Session], projects: List[Project]) 
 def compile_timeframe_stats_for_ai(sessions: List[Session], projects: List[Project]) -> str:
     total_seconds = sum(s.duration_seconds for s in sessions)
     total_hours = total_seconds / 3600.0
-    total_commits = sum(len(s.commits) for s in sessions)
     
     project_map = {p.id: p.name for p in projects if p.id is not None}
     project_durations = defaultdict(int)
@@ -123,7 +123,71 @@ def compile_timeframe_stats_for_ai(sessions: List[Session], projects: List[Proje
             dist_parts.append(f"{pct}% on {name}")
             
     dist_str = ", ".join(dist_parts)
-    return f"User worked {total_hours:.1f}h total. {dist_str}. {total_commits} total Git commits."
+    
+    # Extract commit messages
+    commits_list = []
+    for s in sessions:
+        for c in s.commits:
+            msg = c.get("cleaned_message") or c.get("message") or ""
+            if msg and msg.strip():
+                commits_list.append(msg.strip())
+                
+    # Deduplicate commits case-insensitively
+    seen_commits = set()
+    unique_commits = []
+    for c in commits_list:
+        c_lower = c.lower()
+        if c_lower not in seen_commits:
+            seen_commits.add(c_lower)
+            unique_commits.append(c)
+            
+    # Sort and prioritize unique commits (feat/fix/refactor first)
+    def commit_priority(msg: str) -> int:
+        msg_l = msg.lower()
+        if msg_l.startswith("feat"): return 0
+        if msg_l.startswith("fix"): return 1
+        if msg_l.startswith("refactor"): return 2
+        return 3
+    unique_commits.sort(key=commit_priority)
+    top_commits = unique_commits[:20]
+    
+    # Extract existing AI summaries from sessions
+    ai_stories = []
+    for s in sessions:
+        if s.ai_summary and s.ai_summary.strip():
+            ai_stories.append(s.ai_summary.strip())
+    seen_stories = set()
+    unique_stories = []
+    for story in ai_stories:
+        if story.lower() not in seen_stories:
+            seen_stories.add(story.lower())
+            unique_stories.append(story)
+    top_stories = unique_stories[:10]
+    
+    # Extract notable tooling
+    notable_tools = set()
+    tool_keywords = ["docker", "kubectl", "npm", "pip", "pytest", "cargo", "go", "python", "node", "terraform", "aws", "gcloud"]
+    for s in sessions:
+        for cmd in s.commands:
+            first_word = cmd.command.split()[0].lower() if cmd.command.strip() else ""
+            if first_word in tool_keywords:
+                notable_tools.add(first_word)
+                
+    context_lines = [
+        f"TIME LOGGED: {total_hours:.1f} hours total",
+        f"PROJECTS DISTRIBUTION: {dist_str}",
+        f"TOTAL GIT COMMITS: {len(commits_list)}"
+    ]
+    if top_commits:
+        commits_block = "\n".join(f"  - {c}" for c in top_commits)
+        context_lines.append(f"REPRESENTATIVE GIT COMMITS:\n{commits_block}")
+    if notable_tools:
+        context_lines.append(f"TOOLS/COMMANDS DETECTED: {', '.join(sorted(notable_tools))}")
+    if top_stories:
+        stories_block = "\n".join(f"  - {s}" for s in top_stories)
+        context_lines.append(f"INDIVIDUAL SESSION AI STORIES:\n{stories_block}")
+        
+    return "\n".join(context_lines)
 
 
 import re
@@ -189,6 +253,52 @@ def get_session_memory_str(session: Session) -> str:
 # ==========================================
 # 2. TUI WIDGETS & SCREENS
 # ==========================================
+
+class HelpScreen(ModalScreen[None]):
+    """Modal screen displaying all keyboard shortcuts."""
+    
+    BINDINGS = [
+        Binding("escape", "dismiss_none", "Close", show=False),
+        Binding("question_mark", "dismiss_none", "Close", show=False),
+        Binding("q", "dismiss_none", "Close", show=False),
+    ]
+    
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("⌨️  TermStory Keyboard Shortcuts", id="modal-title"),
+            Static(
+                "[bold]Global Navigation[/bold]\n"
+                "  [cyan]?[/cyan]        : Show this help menu\n"
+                "  [cyan]/[/cyan]        : Search sessions\n"
+                "  [cyan]o[/cyan]        : Configure AI Settings\n"
+                "  [cyan]c[/cyan]        : Copy selected text to clipboard\n"
+                "  [cyan]q[/cyan] / [cyan]Esc[/cyan]  : Quit app / clear search\n\n"
+                "[bold]Canvas Scrolling[/bold]\n"
+                "  [cyan]Ctrl+Down[/cyan] / [cyan]Ctrl+j[/cyan]     : Scroll Down\n"
+                "  [cyan]Ctrl+Up[/cyan]   / [cyan]Ctrl+k[/cyan]     : Scroll Up\n"
+                "  [cyan]Ctrl+PgDn[/cyan] / [cyan]Ctrl+PgUp[/cyan]  : Scroll Page Down/Up\n\n"
+                "[bold]Tree Navigator[/bold]\n"
+                "  [cyan]Up[/cyan]/[cyan]Down[/cyan] / [cyan]j[/cyan]/[cyan]k[/cyan]        : Navigate nodes\n"
+                "  [cyan]Enter[/cyan] / [cyan]Space[/cyan]        : Expand/Collapse\n\n"
+                "[bold]AI Setup Menu[/bold]\n"
+                "  [cyan]Ctrl+g, a, l, c[/cyan]      : Select Provider (Groq, OpenAI, Ollama, Custom)\n"
+                "  [cyan]Ctrl+d[/cyan]               : Disable AI (Local Only)\n",
+                id="modal-desc"
+            ),
+            Horizontal(
+                Button("Close", variant="primary", id="btn-close-help"),
+                id="modal-actions"
+            ),
+            id="modal-panel"
+        )
+        
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-close-help":
+            self.dismiss()
+            
+    def action_dismiss_none(self) -> None:
+        self.dismiss()
+
 
 class OnboardingScreen(ModalScreen[dict]):
     """Modal screen displaying trust warning and AI configuration options."""
@@ -355,7 +465,8 @@ class OnboardingScreen(ModalScreen[dict]):
 class StatsHeader(Static):
     """The cumulative stats header spanning the top of the interface."""
     
-    def update_stats(self, stats: Dict[str, Any], ai_status: str = "") -> None:
+    def update_stats(self, stats: Dict[str, Any], ai_status: str = "", days_limit: Optional[int] = 30) -> None:
+        limit_str = f"Last {days_limit} Days" if days_limit is not None else "All History"
         self.update(
             f"[bold cyan]TermStory Dashboard[/bold cyan]  │  "
             f"[bold]Time logged:[/bold] {stats['total_time']}  │  "
@@ -363,7 +474,7 @@ class StatsHeader(Static):
             f"[bold green]Streak:[/bold green] {stats['streak']} Days  │  "
             f"[bold]Projects:[/bold] {stats['projects_count']}  │  "
             f"{ai_status}\n"
-            f"[dim]Activity (Last 30 Days):[/dim] {stats['heatmap']}"
+            f"[dim]Activity ({limit_str}):[/dim] {stats['heatmap']}"
         )
 
 
@@ -371,9 +482,13 @@ class HistoryTree(Tree):
     """Collapsible date-grouped navigation timeline supporting Vim keys."""
     
     BINDINGS = [
-        ("j", "cursor_down", "Cursor Down"),
-        ("k", "cursor_up", "Cursor Up"),
+        Binding("j", "cursor_down", "Cursor Down", show=False),
+        Binding("k", "cursor_up", "Cursor Up", show=False),
     ]
+    
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.show_root = False
     
     def populate(self, projects: List[Project], sessions: List[Session], search_query: Optional[str] = None) -> None:
         # Flag to inform the app that the tree is being built
@@ -614,19 +729,19 @@ class DetailsCanvas(VerticalScroll):
             self.mount(btn_configure)
         
         if ai_enabled and provider != "disabled" and timeframe_id and timeframe_type in ("month", "date"):
-            # A. Executive Review Section
-            exec_widgets = [Static("[bold gold]━━━ AI Executive Review ━━━[/bold gold]\n")]
+            # A. Timeframe Summary Section
+            exec_widgets = [Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n")]
             
             cached_exec = self.app.db.get_macro_summary(timeframe_id)
             if cached_exec:
-                exec_widgets.append(Static(f"{cached_exec}\n"))
+                exec_widgets.append(Static(f"✨ {cached_exec}\n"))
             elif timeframe_id in getattr(self.app, "generating_reviews", set()):
-                exec_widgets.append(Static("⏳ [italic yellow]Generating Executive Review... please wait[/italic yellow]\n"))
+                exec_widgets.append(Static("⏳ [italic yellow]Generating Timeframe Summary... please wait[/italic yellow]\n"))
             else:
                 stats_summary = compile_timeframe_stats_for_ai(sessions, projects)
                 exec_widgets.append(Static("[dim]Ask AI to write a high-level summary of your work for this period:[/dim]"))
                 try:
-                    btn = Button("✨ Generate Executive Review", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                    btn = Button("✨ Generate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
                     btn.classes = "exec-btn"
                     self.app._temp_stats_summary = stats_summary
                     exec_widgets.append(btn)
@@ -643,7 +758,7 @@ class DetailsCanvas(VerticalScroll):
                 
                 if timeframe_id in bulk_progress:
                     current, total = bulk_progress[timeframe_id]
-                    bulk_widgets.append(Static(f"⏳ [bold yellow]Auto-summarizing sessions: {current}/{total} done...[/bold yellow]\n"))
+                    bulk_widgets.append(Static(f"⏳ [bold yellow]Auto-summarizing sessions: {current}/{total} done...[/bold yellow]\n", id=f"bulk-status-{timeframe_id}"))
                 else:
                     bulk_widgets.append(Static(f"[dim]{len(missing_sessions)} sessions still need AI stories. Generate them all at once:[/dim]"))
                     try:
@@ -686,7 +801,11 @@ class DetailsCanvas(VerticalScroll):
             feed_widgets.append(Static(item_text))
             
             # Show summary or generate button
-            if s.ai_summary:
+            if getattr(s, "is_generating_story", False):
+                if s.ai_summary:
+                    feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
+                feed_widgets.append(Static("  └─ ⏳ [italic yellow]Thinking...[/italic yellow]\n"))
+            elif s.ai_summary:
                 feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
                 if ai_enabled and provider != "disabled" and not getattr(s, "recent_generation", False):
                     btn = Button("⟳ Regenerate", id=f"btn-gen-session-{s.id}")
@@ -695,8 +814,6 @@ class DetailsCanvas(VerticalScroll):
                     feed_widgets.append(row)
                 else:
                     feed_widgets.append(Static("\n"))
-            elif getattr(s, "is_generating_story", False):
-                feed_widgets.append(Static("  └─ ⏳ [italic yellow]Thinking...[/italic yellow]\n"))
             else:
                 if ai_enabled and provider != "disabled":
                     btn = Button("✨ Generate Story", id=f"btn-gen-session-{s.id}")
@@ -735,14 +852,16 @@ class DetailsCanvas(VerticalScroll):
         
         # Display AI summary or dynamic button at the top of details
         ai_widgets = [Static("[bold gold]Session Summary Story[/bold gold]")]
-        if session.ai_summary:
+        if getattr(session, "is_generating_story", False):
+            if session.ai_summary:
+                ai_widgets.append(Static(f"✨ {strip_ansi(session.ai_summary)}\n"))
+            ai_widgets.append(Static("⏳ [italic yellow]Thinking...[/italic yellow]\n"))
+        elif session.ai_summary:
             ai_widgets.append(Static(f"✨ {strip_ansi(session.ai_summary)}\n"))
             if ai_enabled and provider != "disabled" and not getattr(session, "recent_generation", False):
                 btn = Button("⟳ Regenerate", id=f"btn-gen-session-{session.id}")
                 btn.classes = "gen-story-btn small-btn"
                 ai_widgets.append(btn)
-        elif getattr(session, "is_generating_story", False):
-            ai_widgets.append(Static("⏳ [italic yellow]Thinking...[/italic yellow]\n"))
         elif ai_enabled and provider != "disabled":
             btn = Button("✨ Generate Story", id=f"btn-gen-session-{session.id}")
             btn.classes = "gen-story-btn"
@@ -787,16 +906,18 @@ class TermStoryWorkspace(App):
     TITLE = "TermStory — Interactive Dashboard"
     
     BINDINGS = [
-        ("q", "quit_app", "Quit"),
-        ("escape", "quit_app", "Quit"),
-        ("slash", "start_search", "Search"),
-        ("o", "show_onboarding", "Configure AI"),
-        ("ctrl+down", "scroll_canvas_down", ""),
-        ("ctrl+up", "scroll_canvas_up", ""),
-        ("ctrl+j", "scroll_canvas_down", ""),
-        ("ctrl+k", "scroll_canvas_up", ""),
-        ("ctrl+pagedown", "scroll_canvas_page_down", ""),
-        ("ctrl+pageup", "scroll_canvas_page_up", ""),
+        Binding("q", "quit_app", "Quit", show=False),
+        Binding("escape", "quit_app", "Quit", show=False),
+        Binding("slash", "start_search", "Search", show=True, key_display="/"),
+        Binding("question_mark", "show_help", "Help", show=True, key_display="?"),
+        Binding("o", "show_onboarding", "Configure AI", show=True, key_display="o"),
+        Binding("ctrl+down", "scroll_canvas_down", "", show=False),
+        Binding("ctrl+up", "scroll_canvas_up", "", show=False),
+        Binding("ctrl+j", "scroll_canvas_down", "", show=False),
+        Binding("ctrl+k", "scroll_canvas_up", "", show=False),
+        Binding("ctrl+pagedown", "scroll_canvas_page_down", "", show=False),
+        Binding("ctrl+pageup", "scroll_canvas_page_up", "", show=False),
+        Binding("c", "copy_selection", "Copy Selection", show=False),
     ]
     
     CSS = """
@@ -807,9 +928,13 @@ class TermStoryWorkspace(App):
     #master-layout {
         layout: grid;
         grid-size: 2 2;
-        grid-rows: auto 1fr;
+        grid-rows: 3 1fr;
         grid-columns: 30% 70%;
-        height: 100%;
+        height: 1fr;
+        grid-gutter: 0;
+    }
+    Tree {
+        padding: 0;
     }
     .configure-ai-btn {
         margin: 1 2;
@@ -820,7 +945,7 @@ class TermStoryWorkspace(App):
     #stats-panel {
         column-span: 2;
         border-bottom: solid #323238;
-        padding: 1;
+        padding: 0 2;
         height: 3;
         background: #1a1a1e;
         color: #e2e2e9;
@@ -828,10 +953,14 @@ class TermStoryWorkspace(App):
     #tree-container {
         border-right: solid #323238;
         height: 100%;
+        margin: 0;
+        padding: 0;
     }
     #history-navigator {
         height: 1fr;
         background: #121214;
+        margin: 0;
+        padding: 0;
     }
     #search-box {
         display: none;
@@ -841,12 +970,13 @@ class TermStoryWorkspace(App):
         margin: 1 1 0 1;
     }
     #details-canvas {
-        padding: 1 2;
+        padding: 0 2;
         overflow-y: scroll;
         height: 100%;
         background: #121214;
+        margin: 0;
     }
-    OnboardingScreen {
+    OnboardingScreen, HelpScreen {
         align: center middle;
         background: rgba(0, 0, 0, 0.7);
     }
@@ -951,9 +1081,11 @@ class TermStoryWorkspace(App):
         background: transparent;
         color: #86efac;
     }
-    #details-canvas .small-btn:hover {
-        background: #22c55e;
-        color: #121214;
+    #details-canvas .small-btn:hover, #details-canvas .small-btn:focus {
+        background: transparent;
+        color: #86efac;
+        border: none;
+        text-style: none;
     }
     .btn-row {
         height: auto;
@@ -983,8 +1115,45 @@ class TermStoryWorkspace(App):
         self.bulk_running_timeframes = {}
         self.generating_session_stories = set()
         
+    def copy_to_clipboard(self, text: str) -> None:
+        """Robust OS-level clipboard writer using system commands (e.g. pbcopy on macOS),
+        falling back to Textual's default copy_to_clipboard."""
+        import sys
+        import subprocess
+        
+        # Strip ANSI sequences if present (to avoid copying styling markup)
+        cleaned_text = strip_ansi(text)
+        
+        try:
+            if sys.platform == 'darwin':
+                # macOS
+                process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE, close_fds=True)
+                process.communicate(input=cleaned_text.encode('utf-8'))
+            elif sys.platform.startswith('linux'):
+                # Linux (try xclip, then xsel, then wl-copy)
+                for cmd in [['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input'], ['wl-copy']]:
+                    try:
+                        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, close_fds=True)
+                        process.communicate(input=cleaned_text.encode('utf-8'))
+                        if process.returncode == 0:
+                            break
+                    except FileNotFoundError:
+                        continue
+            elif sys.platform == 'win32':
+                # Windows
+                process = subprocess.Popen(['clip'], stdin=subprocess.PIPE, close_fds=True)
+                process.communicate(input=cleaned_text.encode('utf-8'))
+        except Exception:
+            pass
+            
+        # Also always fall back to Textual's native copy_to_clipboard (sends OSC 52 sequence)
+        # to support remote SSH terminals.
+        try:
+            super().copy_to_clipboard(cleaned_text)
+        except Exception:
+            pass
+            
     def compose(self) -> ComposeResult:
-        yield Header()
         with Grid(id="master-layout"):
             yield StatsHeader(id="stats-panel")
             with Vertical(id="tree-container"):
@@ -1051,7 +1220,7 @@ class TermStoryWorkspace(App):
         self.query_one("#history-navigator").focus()
 
     def update_stats_header(self) -> None:
-        stats = calculate_dashboard_stats(self.sessions, self.projects)
+        stats = calculate_dashboard_stats(self.sessions, self.projects, days_limit=self.days_limit or 90)
         ai_enabled = self.config.get("ai_enabled", False)
         provider = self.config.get("active_provider", "disabled")
         
@@ -1064,14 +1233,15 @@ class TermStoryWorkspace(App):
             else:
                 ai_status = f"[bold cyan]AI: ACTIVE ({provider.upper()})[/bold cyan]"
                 
-        self.query_one("#stats-panel").update_stats(stats, ai_status=ai_status)
+        self.query_one("#stats-panel").update_stats(stats, ai_status=ai_status, days_limit=self.days_limit)
 
-    def update_session_ui(self, session_id: int, new_summary: str) -> None:
+    def update_session_ui(self, session_id: int, new_summary: str, skip_canvas_refresh: bool = False) -> None:
         """Update tree node label and refresh details canvas if necessary. Safe to run on main thread."""
         tree = self.query_one("#history-navigator")
         tree.update_session_label(session_id, new_summary)
         tree.refresh()
-        self.refresh_details_canvas()
+        if not skip_canvas_refresh:
+            self.refresh_details_canvas()
 
     def refresh_details_canvas(self) -> None:
         """Helper to re-render the currently selected node's content on the details canvas.
@@ -1119,13 +1289,17 @@ class TermStoryWorkspace(App):
             proj_name = "Other"
 
         commands = [cmd.command for cmd in session.commands]
+        session_commits = [c.get("cleaned_message") or c.get("message") or "" for c in session.commits]
+        session_commits = [c.strip() for c in session_commits if c.strip()]
+        
         summary = generate_ai_summary(
             commands=commands,
             api_key=api_key,
             api_base_url=api_base_url,
             model_name=model_name,
             provider=provider,
-            project_name=proj_name
+            project_name=proj_name,
+            commits=session_commits
         )
 
         session.is_generating_story = False
@@ -1166,11 +1340,11 @@ class TermStoryWorkspace(App):
         
         if provider in ("groq", "openai") and not api_key:
             return
-            
         self.generating_reviews.add(timeframe_id)
         self.call_from_thread(self.refresh_details_canvas)
         
-        summary = generate_executive_review(
+        from termstory.ai import generate_timeframe_summary
+        summary = generate_timeframe_summary(
             stats_summary=stats_summary,
             api_key=api_key,
             api_base_url=api_base_url,
@@ -1208,7 +1382,6 @@ class TermStoryWorkspace(App):
                 break
                 
             session.is_generating_story = True
-            self.call_from_thread(self.refresh_details_canvas)
             
             project_map = {p.id: p for p in self.projects if p.id is not None}
             proj = project_map.get(session.project_id)
@@ -1217,13 +1390,17 @@ class TermStoryWorkspace(App):
                 proj_name = "Other"
 
             commands = [cmd.command for cmd in session.commands]
+            session_commits = [c.get("cleaned_message") or c.get("message") or "" for c in session.commits]
+            session_commits = [c.strip() for c in session_commits if c.strip()]
+            
             summary = generate_ai_summary(
                 commands=commands,
                 api_key=api_key,
                 api_base_url=api_base_url,
                 model_name=model_name,
                 provider=provider,
-                project_name=proj_name
+                project_name=proj_name,
+                commits=session_commits
             )
             
             session.is_generating_story = False
@@ -1236,13 +1413,21 @@ class TermStoryWorkspace(App):
                 session.recent_generation = True
                 def clear_recent_bulk(s=session):
                     s.recent_generation = False
-                    self.refresh_details_canvas()
+                    if timeframe_id not in self.bulk_running_timeframes:
+                        self.refresh_details_canvas()
                 self.call_from_thread(self.set_timer, 15.0, clear_recent_bulk)
                 
-                self.call_from_thread(self.update_session_ui, session.id, summary)
+                self.call_from_thread(self.update_session_ui, session.id, summary, True)
                 
             self.bulk_running_timeframes[timeframe_id] = (idx + 1, total)
-            self.call_from_thread(self.refresh_details_canvas)
+            
+            def update_progress(tid=timeframe_id, c=idx+1, t=total):
+                try:
+                    w = self.query_one(f"#bulk-status-{tid}")
+                    w.update(f"⏳ [bold yellow]Auto-summarizing sessions: {c}/{t} done...[/bold yellow]\n")
+                except Exception:
+                    pass
+            self.call_from_thread(update_progress)
             
             if idx < total - 1:
                 time.sleep(2.0)
@@ -1297,6 +1482,9 @@ class TermStoryWorkspace(App):
 
     def action_show_onboarding(self) -> None:
         self.push_screen(OnboardingScreen(self.config), self.handle_onboarding_result)
+        
+    def action_show_help(self) -> None:
+        self.push_screen(HelpScreen())
 
     def action_quit_app(self) -> None:
         self.exit()
@@ -1312,6 +1500,17 @@ class TermStoryWorkspace(App):
         
     def action_scroll_canvas_page_up(self) -> None:
         self.query_one("#details-canvas").scroll_relative(y=-15)
+        
+    def action_copy_selection(self) -> None:
+        """Copy current Textual selection to clipboard."""
+        for node in self.screen.walk_children():
+            if hasattr(node, 'text_selection') and node.text_selection is not None:
+                sel = node.get_selection(node.text_selection)
+                if sel:
+                    self.copy_to_clipboard(sel[0])
+                    self.notify("Copied selection to clipboard!")
+                    return
+        self.notify("Nothing selected. (Pro-tip: Hold Option/Alt to copy with Cmd+C natively!)")
         
     def action_start_search(self) -> None:
         search_box = self.query_one("#search-box")

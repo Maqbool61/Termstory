@@ -43,11 +43,25 @@ class Session:
     project_id: Optional[int]   # FK to projects
     commands: List[Command] = field(default_factory=list) # Commands in this session
     commits: List[Dict] = field(default_factory=list)     # Commits in this session
+    ai_summary: Optional[str] = None
+
     
     @property
     def duration_readable(self) -> str:
         """Return '2h 15m' format"""
         return format_duration(self.duration_seconds)
+
+    @property
+    def date_str(self) -> str:
+        if not hasattr(self, "_cached_date_str") or self._cached_date_str is None:
+            self._cached_date_str = datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%d")
+        return self._cached_date_str
+
+    @property
+    def start_time_formatted(self) -> str:
+        if not hasattr(self, "_cached_start_time_formatted") or self._cached_start_time_formatted is None:
+            self._cached_start_time_formatted = datetime.fromtimestamp(self.start_time).strftime("%I:%M %p")
+        return self._cached_start_time_formatted
 
 @dataclass
 class Project:
