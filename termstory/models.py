@@ -29,6 +29,16 @@ class Command:
     project_id: Optional[int] = None   # FK to projects table
     id: Optional[int] = None    # Primary key in DB (if stored)
     is_legacy: bool = False     # True = synthetic timestamp (no real timestamp in history file)
+    recovery_source: Optional[str] = None
+    # Human-readable string describing HOW the Timestamp Detective recovered this command's
+    # timestamp.  Examples:
+    #   "git log: myapp@a3f9b2c"              → matched a git commit message
+    #   "stat: package.json mtime"            → file system stat on a created file
+    #   "brew Cellar/jq"                      → Homebrew Cellar directory mtime
+    #   "docker image inspect: my-app"        → docker image creation timestamp
+    #   "Interpolated (between X and Y)"      → mathematically placed between two anchors
+    # None for all commands that had real EXTENDED_HISTORY timestamps.
+
     
     @property
     def readable_time(self) -> str:

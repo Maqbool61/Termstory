@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from termstory.models import Command
+from termstory.timestamp_detective import TimestampDetective
 
 def clean_command(cmd_str: str) -> Optional[str]:
     """Clean the command string: strip whitespace and join multiline commands with spaces"""
@@ -146,22 +147,25 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
         # Flag missing/legacy timestamps for white-glove onboarding consent
         os.environ["TERMSTORY_MISSING_TIMESTAMPS"] = "1"
 
-    # Resolve the anchor_time for legacy commands
+    # ── Resolve the base anchor_time used for commands the Detective can't place ──
+    # If there are real timestamped commands, anchor just before the oldest one.
+    # Otherwise fall back to the file's OS mtime (100% legacy file with no EXTENDED_HISTORY).
     if timestamped_items:
-        # Oldest timestamped command's timestamp minus 1 minute (60 seconds) buffer
         oldest_ts = min(item["timestamp"] for item in timestamped_items)
-        anchor_time = oldest_ts - 60
+        anchor_time = oldest_ts - 60  # 60-second buffer so legacy commands don't overlap
     else:
-        # 100% legacy file fallback
         try:
             anchor_time = int(os.path.getmtime(filepath))
         except Exception:
             anchor_time = int(datetime.now().timestamp())
 
-    # Build the final list of Commands, applying locking/uniquifying check from existing_lookup
-    consumed = {}  # command_str -> count
-    
+    # ── Build the final list of Commands ────────────────────────────────────────
+    # Apply the database timestamp-locking lookup so synthetic timestamps are stable
+    # across repeated parse runs (prevents legacy command timestamps from "shifting").
+    consumed: Dict[str, int] = {}  # command_str -> how many times we've consumed it
+
     def resolve_timestamp(cmd: str, fallback_ts: int) -> int:
+        """Return the locked DB timestamp for this command if one exists, else the fallback."""
         if existing_lookup and cmd in existing_lookup:
             ts_list = existing_lookup[cmd]
             idx = consumed.get(cmd, 0)
@@ -170,23 +174,79 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
                 return ts_list[idx]
         return fallback_ts
 
-    resolved_commands = []
-    
-    # 1-Second Step-Back Algorithm for legacy commands
-    # Tag every synthetic-timestamp command with is_legacy=True so downstream
-    # components (session builder, TUI) can identify and label this data clearly.
-    n_legacy = len(legacy_items)
-    for idx, item in enumerate(legacy_items):
-        fallback_ts = anchor_time + (idx - n_legacy + 1)
+    resolved_commands: List[Command] = []
+
+    # ── Phase 1: Run the Timestamp Detective on all legacy items ─────────────────
+    # The Detective tries to recover real timestamps using:
+    #   A. Virtual CWD tracking (cd/pushd/popd replay)
+    #   B. Five detectors: git commit, file stat, package manager, docker, lockfiles
+    #   C. Anchor interpolation between discovered timestamps
+    # Items that the Detective resolves get is_legacy=False and a recovery_source string.
+    # Truly unresolvable items get placed by the classic 1-second step-back below.
+    if legacy_items:
+        detective = TimestampDetective(
+            search_root=os.path.expanduser("~"),
+            project_paths=[]  # populated from cli.py via parse_all_histories when available
+        )
+        enriched_legacy = detective.resolve_all(legacy_items)
+    else:
+        enriched_legacy = []
+
+    # Split enriched legacy into:
+    #   detective_resolved → Detective found real evidence (is_legacy_still=False)
+    #   still_synthetic    → No evidence found; use 1-second step-back (is_legacy_still=True)
+    detective_resolved = [e for e in enriched_legacy if not e["is_legacy_still"] and e["detected_ts"] is not None]
+    still_synthetic    = [e for e in enriched_legacy if e["is_legacy_still"]]
+
+    # ── Phase 2: Add Detective-resolved commands with real timestamps ─────────────
+    for item in detective_resolved:
+        ts = item["detected_ts"]
+        resolved_ts = resolve_timestamp(item["command"], ts)
+        resolved_commands.append(Command(
+            timestamp=resolved_ts,
+            command=item["command"],
+            exit_code=0,
+            duration=0,
+            is_legacy=False,              # Real timestamp — promoted out of Legacy Archive
+            recovery_source=item.get("detected_source")  # Chain of Custody attribution
+        ))
+
+    # ── Phase 3: Interpolated / step-back commands — still synthetic but placed ──
+    # These include:
+    #   - Commands interpolated between two anchors (have a detected_ts but is_legacy_still=True)
+    #   - Commands in prefix/suffix gaps (step-back / step-forward from nearest anchor)
+    #   - Truly unresolvable commands (detected_ts may be None → fall back to anchor_time)
+    interpolated = [e for e in still_synthetic if e.get("detected_ts") is not None]
+    unresolvable = [e for e in still_synthetic if e.get("detected_ts") is None]
+
+    for item in interpolated:
+        ts = item["detected_ts"]
+        resolved_ts = resolve_timestamp(item["command"], ts)
+        resolved_commands.append(Command(
+            timestamp=resolved_ts,
+            command=item["command"],
+            exit_code=0,
+            duration=0,
+            is_legacy=True,               # Synthetic, but placed correctly in the timeline
+            recovery_source=item.get("detected_source")  # e.g. "Interpolated (between X → Y)"
+        ))
+
+    # ── Phase 4: Step-back for truly unresolvable (no anchors found at all) ──────
+    n_unresolvable = len(unresolvable)
+    for idx, item in enumerate(unresolvable):
+        # Distribute evenly before anchor_time, preserving original order
+        fallback_ts = anchor_time + (idx - n_unresolvable + 1)
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
         resolved_commands.append(Command(
             timestamp=resolved_ts,
             command=item["command"],
             exit_code=0,
             duration=0,
-            is_legacy=True   # Mark as synthetic — no real timestamp was found
+            is_legacy=True,               # Fully synthetic — no evidence found
+            recovery_source=None          # No attribution: Detective had nothing to work with
         ))
-        
+
+    # ── Add real timestamped commands (no Detective needed) ──────────────────────
     for item in timestamped_items:
         fallback_ts = item["timestamp"]
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
@@ -195,20 +255,17 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
             command=item["command"],
             exit_code=0,
             duration=item["duration"]
+            # is_legacy=False (default), recovery_source=None (default)
         ))
 
-    # Standard filtering logic (older than 5 years or future timestamps)
+    # Standard filtering: drop impossibly old or future-dated commands
     now = int(datetime.now().timestamp())
     five_years_ago = now - (5 * 365 * 24 * 60 * 60)
-    
-    filtered_commands = []
-    for cmd in resolved_commands:
-        if cmd.timestamp < five_years_ago:
-            continue
-        if cmd.timestamp > now:
-            continue
-        filtered_commands.append(cmd)
-        
+
+    filtered_commands = [
+        cmd for cmd in resolved_commands
+        if five_years_ago <= cmd.timestamp <= now
+    ]
     filtered_commands.sort(key=lambda x: x.timestamp)
     return filtered_commands
 

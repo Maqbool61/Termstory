@@ -86,6 +86,14 @@ class Database:
             cursor.execute("ALTER TABLE sessions ADD COLUMN ai_summary TEXT;")
         except sqlite3.OperationalError:
             pass
+
+        # v0.2.9: Add recovery_source column to commands so the Timestamp Detective's
+        # Chain of Custody attribution survives the DB round-trip and appears in the TUI.
+        # NULL for all commands with real EXTENDED_HISTORY timestamps.
+        try:
+            cursor.execute("ALTER TABLE commands ADD COLUMN recovery_source TEXT;")
+        except sqlite3.OperationalError:
+            pass  # Column already exists — safe to ignore
             
         # Create macro_summaries table if not exists
         cursor.execute("""
@@ -291,41 +299,65 @@ class Database:
                     cmd.session_id = session_id_map[cmd.session_id]
                     
             # --- 3. Save Commands ---
+            # Fetch existing commands in the same timestamp range so we can diff.
+            # We now also select recovery_source so we can update it if the Detective
+            # ran again with new information.
             if commands:
                 min_ts = min(cmd.timestamp for cmd in commands)
                 max_ts = max(cmd.timestamp for cmd in commands)
                 cursor.execute("""
-                    SELECT timestamp, command, id, exit_code, session_id, project_id
+                    SELECT timestamp, command, id, exit_code, session_id, project_id, recovery_source
                     FROM commands
                     WHERE timestamp >= ? AND timestamp <= ?
                 """, (min_ts, max_ts))
-                db_cmds = {(row[0], row[1]): {"id": row[2], "exit_code": row[3], "session_id": row[4], "project_id": row[5]} for row in cursor.fetchall()}
+                db_cmds = {
+                    (row[0], row[1]): {
+                        "id": row[2],
+                        "exit_code": row[3],
+                        "session_id": row[4],
+                        "project_id": row[5],
+                        "recovery_source": row[6]
+                    } for row in cursor.fetchall()
+                }
             else:
                 db_cmds = {}
                 
             new_commands_to_insert = []
             commands_to_update = []
-            
+
             for cmd in commands:
                 key = (cmd.timestamp, cmd.command)
+                recovery_src = getattr(cmd, "recovery_source", None)
                 if key in db_cmds:
                     db_c = db_cmds[key]
                     cmd.id = db_c["id"]
-                    # Update details if they mismatch
-                    if db_c["exit_code"] != cmd.exit_code or db_c["session_id"] != cmd.session_id or db_c["project_id"] != cmd.project_id:
-                        commands_to_update.append((cmd.exit_code, cmd.session_id, cmd.project_id, db_c["id"]))
+                    # Update if any column changed, including recovery_source
+                    # (a subsequent parse run may have resolved a better source).
+                    if (
+                        db_c["exit_code"] != cmd.exit_code
+                        or db_c["session_id"] != cmd.session_id
+                        or db_c["project_id"] != cmd.project_id
+                        or (recovery_src and db_c["recovery_source"] != recovery_src)
+                    ):
+                        commands_to_update.append(
+                            (cmd.exit_code, cmd.session_id, cmd.project_id, recovery_src, db_c["id"])
+                        )
                 else:
-                    new_commands_to_insert.append((cmd.timestamp, cmd.command, cmd.exit_code, cmd.session_id, cmd.project_id))
-                    
+                    # New command — include recovery_source from the Detective
+                    new_commands_to_insert.append(
+                        (cmd.timestamp, cmd.command, cmd.exit_code,
+                         cmd.session_id, cmd.project_id, recovery_src)
+                    )
+
             if new_commands_to_insert:
                 cursor.executemany("""
-                    INSERT INTO commands (timestamp, command, exit_code, session_id, project_id)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO commands (timestamp, command, exit_code, session_id, project_id, recovery_source)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """, new_commands_to_insert)
-                
+
             if commands_to_update:
                 cursor.executemany("""
-                    UPDATE commands SET exit_code = ?, session_id = ?, project_id = ? WHERE id = ?
+                    UPDATE commands SET exit_code = ?, session_id = ?, project_id = ?, recovery_source = ? WHERE id = ?
                 """, commands_to_update)
                 
             # Prune legacy duplicate sessions that became orphaned (have no commands)
@@ -363,25 +395,27 @@ class Database:
                 s_id, start, end, duration, p_id, ai_sum = row
     
                 
-                # 2. Fetch all commands for this session
+                # 2. Fetch all commands for this session, including recovery_source
+                # so the Chain of Custody tooltip can be displayed in the TUI.
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
                 """, (s_id,))
                 cmd_rows = cursor.fetchall()
-                
+
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
                         command=command_text,
                         exit_code=exit_code,
                         session_id=s_id,
-                        project_id=cmd_p_id
+                        project_id=cmd_p_id,
+                        recovery_source=rec_src
                     ))
                     
                 # 3. Fetch all commits for this session (5m pre, 10m post buffers)
@@ -478,25 +512,26 @@ class Database:
             for row in session_rows:
                 s_id, start, end, duration, p_id, ai_sum = row
                 
-                # Fetch commands
+                # Fetch commands including recovery_source for Chain of Custody
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
                 """, (s_id,))
                 cmd_rows = cursor.fetchall()
-                
+
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
                         command=command_text,
                         exit_code=exit_code,
                         session_id=s_id,
-                        project_id=cmd_p_id
+                        project_id=cmd_p_id,
+                        recovery_source=rec_src
                     ))
                     
                 # Fetch commits (with buffers)
@@ -550,23 +585,24 @@ class Database:
     
                 
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
                 """, (s_id,))
                 cmd_rows = cursor.fetchall()
-                
+
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
                         command=command_text,
                         exit_code=exit_code,
                         session_id=s_id,
-                        project_id=cmd_p_id
+                        project_id=cmd_p_id,
+                        recovery_source=rec_src
                     ))
                     
                 # 3. Fetch all commits for this session (5m pre, 10m post buffers)
@@ -620,23 +656,24 @@ class Database:
     
                 
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
                 """, (s_id,))
                 cmd_rows = cursor.fetchall()
-                
+
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
                         command=command_text,
                         exit_code=exit_code,
                         session_id=s_id,
-                        project_id=cmd_p_id
+                        project_id=cmd_p_id,
+                        recovery_source=rec_src
                     ))
                     
                 # 3. Fetch all commits for this session (5m pre, 10m post buffers)

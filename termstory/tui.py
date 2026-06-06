@@ -646,11 +646,26 @@ class NavigationTree(Tree):
                             start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
                             end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
 
-                            # Legacy Archive sessions get a distinct label so users instantly
-                            # understand the data has synthetic (recovered) timestamps
                             if getattr(s, "is_legacy", False):
+                                # Distinguish between "Recovered" (detective found anchors and
+                                # interpolated) and "Legacy Archive" (zero evidence found).
+                                # A session is "Recovered" if at least one command has a
+                                # recovery_source — meaning the Detective placed it in real time.
+                                has_recovery = any(
+                                    getattr(c, "recovery_source", None)
+                                    for c in s.commands
+                                )
                                 cmd_count = len(s.commands)
-                                session_label = f"📦 Legacy Archive [dim]({cmd_count} recovered cmds)[/]"
+                                if has_recovery:
+                                    session_label = (
+                                        f"🔍 Recovered Archive "
+                                        f"[dim]({cmd_count} cmds • {start_str} - {end_str})[/]"
+                                    )
+                                else:
+                                    session_label = (
+                                        f"📦 Legacy Archive "
+                                        f"[dim]({cmd_count} recovered cmds)[/]"
+                                    )
                             else:
                                 memory = get_session_memory_str(s)
                                 session_label = f"✨ {memory} [dim]({start_str} - {end_str})[/]"
@@ -1347,28 +1362,60 @@ class DetailsCanvas(VerticalScroll):
         # ── Legacy Archive: special banner for synthetic-timestamp sessions ──────
         if getattr(session, "is_legacy", False):
             cmd_count = len(session.commands)
-            archive_header = Text()
-            archive_header.append("📦 LEGACY ARCHIVE  (Pre-TermStory History)\n", style="bold yellow")
-            archive_header.append("─" * 60 + "\n", style="dim")
-            self.mount(Static(archive_header))
-            self.mount(Static(
-                "[dim]These commands were recovered from your shell history file without\n"
-                "timestamps. They have been grouped here safely to preserve your history.\n"
-                "Exact dates and times cannot be reconstructed.\n\n"
-                "[bold]Tip:[/bold] Run [cyan]termstory ui[/cyan] again after some new commands to see\n"
-                "real sessions appear alongside this archive.[/dim]\n"
-            ))
-            self.mount(Static(f"[dim]Commands recovered: [bold]{cmd_count}[/bold][/dim]\n\n"))
 
+            # Determine if any commands were placed by the Detective (Recovered Archive)
+            # vs. purely synthetic with no evidence (plain Legacy Archive).
+            has_recovery = any(
+                getattr(c, "recovery_source", None) for c in session.commands
+            )
+
+            if has_recovery:
+                # ── Recovered Archive: Detective found anchors + interpolation ──
+                archive_header = Text()
+                archive_header.append("🔍 RECOVERED ARCHIVE  (Timestamp Detective)", style="bold cyan")
+                archive_header.append("\n" + "─" * 60 + "\n", style="dim")
+                self.mount(Static(archive_header))
+                self.mount(Static(
+                    "[dim]These commands were recovered from your shell history and placed\n"
+                    "in real time using forensic evidence (git logs, file metadata, package\n"
+                    "manager artifacts). Timestamps marked [cyan][\ud83d\udd0d Recovered][/cyan] are exact;\n"
+                    "those marked [yellow][\ud83d\udd0d Interpolated][/yellow] are mathematically estimated\n"
+                    "between two known anchor points.[/dim]\n"
+                ))
+            else:
+                # ── Pure Legacy Archive: no evidence at all ──
+                archive_header = Text()
+                archive_header.append("📦 LEGACY ARCHIVE  (Pre-TermStory History)", style="bold yellow")
+                archive_header.append("\n" + "─" * 60 + "\n", style="dim")
+                self.mount(Static(archive_header))
+                self.mount(Static(
+                    "[dim]These commands were recovered from your shell history file without\n"
+                    "timestamps. They have been grouped here safely to preserve your history.\n"
+                    "Exact dates and times cannot be reconstructed for this group.\n\n"
+                    "[bold]Tip:[/bold] Enable [cyan]EXTENDED_HISTORY[/cyan] and restart TermStory\n"
+                    "to get real timestamps going forward.[/dim]\n"
+                ))
+
+            self.mount(Static(f"[dim]Commands in this archive: [bold]{cmd_count}[/bold][/dim]\n\n"))
+
+            # Show ALL commands — no noise filtering for archive sessions — so the user
+            # can verify their data was recovered completely.  Add Chain of Custody badges
+            # for any command the Detective successfully placed in real time.
             cmd_section = Text()
             cmd_section.append("💻 Recovered Commands:\n", style="bold yellow")
             for cmd in session.commands:
-                # Show ALL commands in the archive — no noise filtering — so the user
-                # can verify their data was recovered completely
-                cmd_section.append(f"  • {cmd.command}\n", style="dim")
+                rec_src = getattr(cmd, "recovery_source", None)
+                if rec_src:
+                    # Command has a Detective-resolved or interpolated timestamp
+                    cmd_section.append(f"  • {cmd.command}\n", style="white")
+                    # Chain of Custody badge — explains exactly how we knew the timestamp
+                    cmd_section.append(f"      [🔍 {rec_src}]\n", style="dim cyan")
+                else:
+                    # Fully synthetic — no evidence
+                    cmd_section.append(f"  • {cmd.command}\n", style="dim")
             self.mount(Static(cmd_section))
             return
-        # ── End Legacy Archive ───────────────────────────────────────────────────
+        # ── End archive handling ──────────────────────────────────────────────────────
 
         proj_name = project.name if project else "Other"
         if proj_name == "General / No Project":
@@ -1428,13 +1475,20 @@ class DetailsCanvas(VerticalScroll):
         for cmd in session.commands:
             t_str = datetime.fromtimestamp(cmd.timestamp).strftime("%H:%M:%S")
             is_noise = _is_noise_command(cmd.command)
-            
+            rec_src = getattr(cmd, "recovery_source", None)
+
             if is_noise:
                 cmd_section.append(f"  • {t_str}  {cmd.command}\n", style="dim")
             else:
                 cmd_section.append(f"  • {t_str}  ", style="cyan")
                 cmd_section.append(f"{cmd.command}\n", style="bold white")
-                
+
+            # Chain of Custody badge — shown for all commands that the Timestamp Detective
+            # placed in real time, whether via direct evidence or interpolation.
+            # This turns "how did it know that?" into a trust-building feature.
+            if rec_src:
+                cmd_section.append(f"      [🔍 {rec_src}]\n", style="dim cyan")
+
         self.mount(Static(cmd_section))
 
 
