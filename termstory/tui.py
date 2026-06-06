@@ -391,9 +391,13 @@ class OnboardingScreen(ModalScreen[dict]):
                 id="modal-provider-selector"
             ),
             Vertical(
-                Input(value=github_username, placeholder="GitHub Username (for ASCII avatar)...", id="input-github-username"),
+                Static("GitHub ID / Username (for ASCII avatar):", classes="input-label"),
+                Input(value=github_username, placeholder="GitHub Username...", id="input-github-username"),
+                Static("API Key (leave blank for local providers):", classes="input-label", id="label-api-key"),
                 Input(value=api_key, placeholder="API Key...", password=True, id="input-api-key"),
+                Static("API Base URL:", classes="input-label"),
                 Input(value=base_url, placeholder="API Base URL...", id="input-base-url"),
+                Static("Model Name:", classes="input-label"),
                 Input(value=model_name, placeholder="Model Name...", id="input-model-name"),
                 id="modal-inputs-container"
             ),
@@ -401,7 +405,6 @@ class OnboardingScreen(ModalScreen[dict]):
                 Button("Save & Enable", variant="success", id="btn-save"),
                 Button("Keep Local Only (No AI)", variant="error", id="btn-disable-ai"),
                 Button("Read Privacy Policy", variant="default", id="btn-read-privacy"),
-                Button("Cancel", variant="default", id="btn-cancel"),
                 id="modal-actions"
             ),
             id="modal-panel"
@@ -428,10 +431,13 @@ class OnboardingScreen(ModalScreen[dict]):
         base_url_input.value = provider_config.get("api_base_url", "")
         model_name_input.value = provider_config.get("model_name", "")
         
+        api_key_label = self.query_one("#label-api-key")
         if provider == "ollama":
             api_key_input.styles.display = "none"
+            api_key_label.styles.display = "none"
         else:
             api_key_input.styles.display = "block"
+            api_key_label.styles.display = "block"
             
     def action_choose_groq(self) -> None:
         self.update_provider_ui("groq")
@@ -512,8 +518,7 @@ class OnboardingScreen(ModalScreen[dict]):
             self.config["active_provider"] = "disabled"
             self.config["has_seen_onboarding"] = True
             self.dismiss(self.config)
-        elif button_id == "btn-cancel":
-            self.dismiss(None)
+
 
 
 class StatsHeader(Static):
@@ -1549,7 +1554,13 @@ class TermStoryWorkspace(App):
         height: auto;
     }
     #modal-inputs-container Input {
-        margin-bottom: 1;
+        margin-bottom: 0;
+    }
+    .input-label {
+        color: #88889a;
+        margin-top: 1;
+        margin-left: 1;
+        text-style: bold;
     }
     #modal-actions {
         align: center middle;
@@ -1919,7 +1930,7 @@ class TermStoryWorkspace(App):
         """Debounced search — waits briefly then repopulates the tree."""
         await asyncio.sleep(0.25)
         tree = self.query_one("#history-navigator")
-        tree.populate(self.projects, self.sessions, search_query=query)
+        tree.populate(self.projects, self.sessions, search_query=query, is_deep_search=getattr(self, "is_deep_search_active", False))
         self.refresh_details_canvas()
 
     @work(thread=True)
