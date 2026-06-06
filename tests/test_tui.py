@@ -500,11 +500,11 @@ async def test_tui_overall_timeframe_summary(monkeypatch):
         )
         
         called = []
-        def mock_generate_timeframe_summary(stats_summary, api_key, api_base_url, model_name, provider):
-            called.append(stats_summary)
+        def mock_generate_wrapped_summary(**kwargs):
+            called.append(kwargs)
             return "Generated Overall Summary."
             
-        monkeypatch.setattr("termstory.tui.generate_timeframe_summary", mock_generate_timeframe_summary)
+        monkeypatch.setattr("termstory.tui.generate_wrapped_summary", mock_generate_wrapped_summary)
         
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()

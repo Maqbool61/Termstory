@@ -341,6 +341,14 @@ The layout is defined in [tui.py](file:///Users/himanshuverma/Projects/termstory
 * **Stats Header**: Spans two columns (`column-span: 2`) at a fixed height of `3` rows, keeping a dark background (`#1a1a1e`) and a border separating it from the main workspace.
 * **Explorer & Canvas Panels**: Set to scrollable height blocks with a dark background (`#121214`), separated by a thin vertical line (`border-right: solid #323238`).
 
+### TermStory Wrapped (Monthly & Overall Timeline Reviews)
+* **Wrapped Overview**: Selecting a month node or the root `Timeline` node displays a high-density dashboard featuring:
+  * **Macro Churn Matrix**: Detailed LOC git diff analytics (inserted vs. shredded lines) and net code growth stats.
+  * **Delivered Narrative Arcs**: Summary of merged git branches, long/short sprints, and toolchain frequencies.
+  * **Time Sinks**: Identifies top editor buffers, files worked on, and focus layers (Core Logic, Testing, etc.).
+  * **Terminal Combat Diagnostics**: Shell diagnostics comparing exit codes (failed vs. green executions) and success rates.
+  * **AI Behavioral Audit**: A witty AI chronicler roast of the developer's work patterns, style archetypes (e.g. "The Expansionist Architect", "The Midnight Alchemist"), and verdicts.
+
 ### Navigation & Shortcuts Help Screen
 Pressing `?` opens a centered modal help overlay containing keyboard shortcuts. It can be dismissed by pressing `Escape`, `q`, or clicking Close.
 

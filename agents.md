@@ -123,6 +123,14 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - **Project Fallback Strictness**: Overhauled `find_project_root` in [project.py](file:///Users/himanshuverma/Projects/termstory/termstory/project.py) to return `home` (instead of the absolute folder path) when a folder is not inside standard project roots or paths, correctly mapping irrelevant folders (like `~/.ssh`, `~/Downloads`) to `"Other"`.
 * **Files**: [project.py](file:///Users/himanshuverma/Projects/termstory/termstory/project.py), [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py), [test_project.py](file:///Users/himanshuverma/Projects/termstory/tests/test_project.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py).
 
+### 📊 Phase 7: Unified Wrapped View for Overall Timeline
+* **Status**: Fully implemented, integrated, and verified.
+* **Features**:
+  - **Overall Wrapped View**: Modified the root `Timeline` tree node in `termstory ui` to show a beautiful, high-density, aggregated "All-Time / Timeline Wrapped" dashboard.
+  - **Comprehensive Telemetry**: Updated `get_month_wrapped_telemetry` to support `timeframe_id == "overall"`, which dynamically calculates additions, deletions, time sinks, and terminal diagnostics over all ingested history without date boundaries.
+  - **AI Chronicler Audit**: Integrated `generate_wrapped_summary` for the overall review, allowing the user to generate/regenerate an all-time perceptive roast/behavioral audit.
+* **Files**: [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py).
+
 ---
 
 ## 4. Running Verification

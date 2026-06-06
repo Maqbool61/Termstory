@@ -1080,7 +1080,7 @@ class DetailsCanvas(VerticalScroll):
         # 5. AI Behavioral Audit
         ai_enabled = self.app.config.get("ai_enabled", False)
         provider = self.app.config.get("active_provider", "disabled")
-        timeframe_type = "month"
+        timeframe_type = "overall" if timeframe_id == "overall" else "month"
         
         exec_widgets = []
         if ai_enabled and provider != "disabled":
@@ -1790,7 +1790,7 @@ class TermStoryWorkspace(App):
         if target_node:
             tree.select_node(target_node)
         else:
-            self.query_one("#details-canvas").render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
+            self.query_one("#details-canvas").render_wrapped_view("Overall Timeline", "overall", self.sessions, self.projects)
 
     def handle_onboarding_result(self, result: Optional[dict]) -> None:
         if result:
@@ -1961,7 +1961,7 @@ class TermStoryWorkspace(App):
                 model_name=model_name,
                 provider=provider
             )
-        elif timeframe_type == "month":
+        elif timeframe_type in ("month", "overall"):
             telemetry = self.get_month_wrapped_telemetry(timeframe_id)
             summary = generate_wrapped_summary(
                 github_username=telemetry["github_username"],
@@ -2006,20 +2006,33 @@ class TermStoryWorkspace(App):
 
     def get_month_wrapped_telemetry(self, timeframe_id: str) -> dict:
         """Calculate telemetry stats for the TermStory Wrapped monthly report."""
-        parts = timeframe_id.split("-")
-        year = int(parts[0])
-        month = int(parts[1])
-        
         import calendar
         from datetime import datetime
-        start_dt = datetime(year, month, 1)
-        since_ts = int(start_dt.timestamp())
-        last_day = calendar.monthrange(year, month)[1]
-        end_dt = datetime(year, month, last_day, 23, 59, 59)
-        until_ts = int(end_dt.timestamp())
         
-        matched_sessions = [s for s in self.sessions if s.date_str.startswith(timeframe_id)]
-        
+        if timeframe_id == "overall":
+            matched_sessions = self.sessions
+            if not matched_sessions:
+                since_ts = 0
+                until_ts = int(get_current_time().timestamp())
+                focus_hours = 0.0
+            else:
+                since_ts = min(s.start_time for s in matched_sessions)
+                until_ts = max(s.end_time for s in matched_sessions)
+                focus_hours = round(sum(s.duration_seconds for s in matched_sessions) / 3600.0, 1)
+        else:
+            parts = timeframe_id.split("-")
+            year = int(parts[0])
+            month = int(parts[1])
+            
+            start_dt = datetime(year, month, 1)
+            since_ts = int(start_dt.timestamp())
+            last_day = calendar.monthrange(year, month)[1]
+            end_dt = datetime(year, month, last_day, 23, 59, 59)
+            until_ts = int(end_dt.timestamp())
+            
+            matched_sessions = [s for s in self.sessions if s.date_str.startswith(timeframe_id)]
+            focus_hours = round(sum(s.duration_seconds for s in matched_sessions) / 3600.0, 1)
+            
         total_time_seconds = sum(s.duration_seconds for s in matched_sessions)
         focus_hours = round(total_time_seconds / 3600.0, 1)
         
@@ -2397,7 +2410,7 @@ class TermStoryWorkspace(App):
         
         # Repopulate details canvas with overall dashboard summary
         canvas = self.query_one("#details-canvas")
-        canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
+        canvas.render_wrapped_view("Overall Timeline", "overall", self.sessions, self.projects)
         
         self.notify("Deep search cleared. Restored timeline.")
         
@@ -2458,7 +2471,7 @@ class TermStoryWorkspace(App):
             canvas.styles.opacity = 0.0
             
         if not node_data:
-            canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
+            canvas.render_wrapped_view("Overall Timeline", "overall", self.sessions, self.projects)
             if animate:
                 canvas.styles.animate("opacity", 1.0, duration=0.15)
             return
@@ -2467,7 +2480,7 @@ class TermStoryWorkspace(App):
         if node_type == "category":
             category = node_data.get("category")
             if category == "timeline":
-                canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
+                canvas.render_wrapped_view("Overall Timeline", "overall", self.sessions, self.projects)
             elif category == "projects":
                 canvas.remove_children()
                 canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Projects View[/bold yellow]\n[dim]This section will provide a dedicated view for project tracking.[/dim]"))
