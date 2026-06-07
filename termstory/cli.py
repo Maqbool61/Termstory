@@ -156,7 +156,12 @@ def show_ui(
     # boot sequence to offer automatic configuration injection into the user's shell
     # config file. We detect the user's default shell (bash vs zsh) and write the
     # appropriate timekeeping directive. Never perform this without explicit user consent ('Y').
-    if os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1":
+    missing_ts = os.environ.get("TERMSTORY_MISSING_TIMESTAMPS") == "1"
+    _cfg = {}
+    if missing_ts:
+        from termstory.config import load_config, save_config
+        _cfg = load_config()
+    if missing_ts and not _cfg.get("has_seen_timestamp_prompt", False):
         # Detect default shell from $SHELL (e.g. /bin/bash, /usr/bin/zsh)
         shell_path = os.environ.get("SHELL", "")
         is_bash = "bash" in os.path.basename(shell_path).lower()
@@ -178,6 +183,8 @@ def show_ui(
             response = input(
                 "Would you like TermStory to automatically enable history timestamps in your shell config file (`~/.zshrc` or `~/.bashrc`)? [Y/n] "
             ).strip().lower()
+            if response == "":
+                response = "y"
         except (KeyboardInterrupt, EOFError):
             console.print()
             response = "n"
@@ -186,6 +193,8 @@ def show_ui(
             try:
                 with open(config_path, "a") as f:
                     f.write(config_directive)
+                _cfg["has_seen_timestamp_prompt"] = True
+                save_config(_cfg)
                 console.print(
                     f"\n[bold green]✅ Done! Please restart your terminal or run `source {config_display}` "
                     f"for the changes to take effect, then run `termstory ui` again.[/bold green]\n"
@@ -194,8 +203,12 @@ def show_ui(
             except Exception as e:
                 console.print(f"[bold red]Error modifying {config_display}: {e}[/bold red]")
                 console.print("Continuing with legacy history fallback...")
-        else:
+        elif response in ("n", "no"):
+            _cfg["has_seen_timestamp_prompt"] = True
+            save_config(_cfg)
             console.print("Continuing with legacy history fallback...")
+        else:
+            console.print("Invalid response. Continuing with legacy history fallback...")
             
     from termstory.tui import TermStoryWorkspace
     app_tui = TermStoryWorkspace(db, days_limit=None if all_history else days)

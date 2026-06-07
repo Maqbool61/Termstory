@@ -131,7 +131,8 @@ def load_config() -> dict:
                 "model_name": "llama3"
             }
         },
-        "has_seen_onboarding": False
+        "has_seen_onboarding": False,
+        "has_seen_timestamp_prompt": False
     }
     
     # 1. Read existing config file

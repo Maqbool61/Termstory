@@ -132,6 +132,8 @@ def test_cli_ui_onboarding_missing_timestamps_yes(tmp_path, monkeypatch):
     db_file = tmp_path / "test_cli_ui.db"
     monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
     monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
     
     # Mock run_ingestion to do nothing
     monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
@@ -155,10 +157,19 @@ def test_cli_ui_onboarding_missing_timestamps_yes(tmp_path, monkeypatch):
     content = zshrc_file.read_text()
     assert "setopt EXTENDED_HISTORY" in content
 
+    # Verify config flag was saved
+    import json
+    assert config_file.exists()
+    with open(config_file, "r") as f:
+        cfg = json.load(f)
+    assert cfg.get("has_seen_timestamp_prompt") is True
+
 def test_cli_ui_onboarding_missing_timestamps_no(tmp_path, monkeypatch):
     db_file = tmp_path / "test_cli_ui.db"
     monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
     monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
     
     # Mock run_ingestion
     monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
@@ -178,12 +189,27 @@ def test_cli_ui_onboarding_missing_timestamps_no(tmp_path, monkeypatch):
     assert "Continuing with legacy history fallback" in result.stdout
     assert len(workspace_runs) == 1
 
+    # Verify config flag was saved
+    import json
+    assert config_file.exists()
+    with open(config_file, "r") as f:
+        cfg = json.load(f)
+    assert cfg.get("has_seen_timestamp_prompt") is True
+
+    # Second run should not re-prompt once flag is set
+    result2 = runner.invoke(app, ["ui"])
+    assert result2.exit_code == 0
+    assert "automatically enable history timestamps" not in result2.stdout
+    assert len(workspace_runs) == 2
+
 
 def test_cli_ui_onboarding_bash_shell(tmp_path, monkeypatch):
     """On a bash shell, onboarding should write HISTTIMEFORMAT to ~/.bashrc."""
     db_file = tmp_path / "test_cli_ui.db"
     monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
     monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
     monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
     monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
     monkeypatch.setenv("SHELL", "/bin/bash")
@@ -207,6 +233,13 @@ def test_cli_ui_onboarding_bash_shell(tmp_path, monkeypatch):
     content = bashrc_file.read_text()
     assert 'HISTTIMEFORMAT="%F %T "' in content
     assert "setopt EXTENDED_HISTORY" not in content
+
+    # Verify config flag was saved
+    import json
+    assert config_file.exists()
+    with open(config_file, "r") as f:
+        cfg = json.load(f)
+    assert cfg.get("has_seen_timestamp_prompt") is True
 
 
 def test_run_ingestion_no_history_files(tmp_path, monkeypatch, capsys):
