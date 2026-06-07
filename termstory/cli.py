@@ -257,11 +257,17 @@ def show_ui(
                 
                 _cfg["has_seen_timestamp_prompt"] = True
                 save_config(_cfg)
-                console.print(
-                    f"\n[bold green]✅ Done! Please restart your terminal or run `source {config_display}` "
-                    f"for the changes to take effect, then run `termstory ui` again.[/bold green]\n"
-                )
-                sys.exit(0)
+                
+                if not already_exists:
+                    console.print(
+                        f"\n[bold green]✅ Done! Please restart your terminal or run `source {config_display}` "
+                        f"for the changes to take effect, then run `termstory ui` again.[/bold green]\n"
+                    )
+                    sys.exit(0)
+                else:
+                    console.print(
+                        f"\n[yellow]⚡ Shell configuration already has timestamps enabled! Proceeding to TUI...[/yellow]\n"
+                    )
             except Exception as e:
                 console.print(f"[bold red]Error modifying {config_display}: {e}[/bold red]")
                 console.print("Continuing with legacy history fallback...")

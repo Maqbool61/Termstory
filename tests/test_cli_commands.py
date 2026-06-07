@@ -337,6 +337,7 @@ def test_cli_zshrc_idempotency(tmp_path, monkeypatch):
     monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
     
     monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    monkeypatch.setattr("termstory.tui.TermStoryWorkspace.run", lambda self: None)
     monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
     monkeypatch.setenv("SHELL", "/bin/zsh")
     
