@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-06-07
+
 ### Added
 - One-time console reminder on exit when the TUI is closed and the AI provider is disabled.
 - Automatic local Git project path scanning (`discover_project_paths`) in the ingestion pipeline to feed into the `TimestampDetective` for legacy command reconstruction.
