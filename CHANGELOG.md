@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-06-08
+
+### Added
+- `test_parse_zsh_history_legacy_spread` test case to validate large legacy history distributions.
+
+### Fixed
+- Legacy history cramming bug where naive 1-second fallback stepping collapsed thousands of commands into a single calendar day; replaced with robust 10-second bounded gap interpolation.
+- Suffix bound interpolation to sequentially step forward 10 seconds from the last known anchor instead of jumping to the present time.
+- Five-year silent filter pruning edge-case: fallback timestamp subtraction is now strictly bounded by the 5-year history cutoff to ensure older legacy commands are never accidentally dropped.
+- Redundant `git log` subprocess calls in `TimestampDetective` by reusing the internal git log cache for oldest repo anchor lookups.
+- Duplicate configuration insertions in `~/.zshrc` when saving the `EXTENDED_HISTORY` onboarding prompt setting.
+- Terminal state corruption on abnormal exits by ensuring the TUI properly cleans up terminal settings.
+
 ## [0.2.11] - 2026-06-07
 
 ### Added
