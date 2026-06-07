@@ -78,7 +78,7 @@ def run_ingestion(db: Database) -> None:
             if root_dir != "~":
                 for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
                     project_paths.append(os.path.dirname(git_dir))
-    project_paths = list(set(project_paths))
+    project_paths = sorted(set(project_paths))
 
     commands = parse_all_histories(history_files, db=db, project_paths=project_paths)
     if len(commands) == 0:
@@ -100,9 +100,12 @@ def run_ingestion(db: Database) -> None:
     else:
         since_ts = int(get_current_time().timestamp()) - 90 * 24 * 3600
         
+    is_deep_history = since_ts < int(get_current_time().timestamp()) - 90 * 24 * 3600
+    git_timeout = 30 if is_deep_history else 10
+        
     for p in projects:
         if p.id is not None and p.path:
-            commits = get_project_commits(p.path, since_ts)
+            commits = get_project_commits(p.path, since_ts, timeout=git_timeout)
             if commits:
                 db.save_commits(p.id, commits)
 

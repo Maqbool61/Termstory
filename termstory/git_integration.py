@@ -67,7 +67,7 @@ def clean_commit_message(message: str) -> str:
         
     return msg
 
-def get_project_commits(project_path: str, since_ts: int) -> List[Dict]:
+def get_project_commits(project_path: str, since_ts: int, timeout: int = 10) -> List[Dict]:
     """Get recent commits for a project since a specific Unix timestamp"""
     abs_path = os.path.abspath(os.path.expanduser(project_path))
     if not is_git_repo(abs_path):
@@ -88,7 +88,7 @@ def get_project_commits(project_path: str, since_ts: int) -> List[Dict]:
             stderr=subprocess.PIPE,
             text=True,
             check=False,
-            timeout=10
+            timeout=timeout
         )
         if res.returncode != 0:
             return []

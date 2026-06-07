@@ -1,20 +1,20 @@
 import json
 import urllib.request
 import urllib.error
+import threading
 from typing import List, Optional
 from termstory.sanitizer import sanitize_session_commands
 
-_last_ai_error: Optional[str] = None
+_local_ai_state = threading.local()
 
 def get_last_ai_error() -> Optional[str]:
-    """Retrieve the last AI call error message, if any."""
-    global _last_ai_error
-    return _last_ai_error
+    """Retrieve the last AI call error message, if any, for the current thread."""
+    return getattr(_local_ai_state, "last_error", None)
 
 def clear_last_ai_error() -> None:
-    """Clear the last AI call error message."""
-    global _last_ai_error
-    _last_ai_error = None
+    """Clear the last AI call error message for the current thread."""
+    if hasattr(_local_ai_state, "last_error"):
+        delattr(_local_ai_state, "last_error")
 
 def _send_llm_request(
     prompt: str,
@@ -26,8 +26,7 @@ def _send_llm_request(
     timeout: float = 30.0
 ) -> Optional[str]:
     """Shared helper to construct and send the OpenAI-compatible chat completion request."""
-    global _last_ai_error
-    _last_ai_error = None
+    _local_ai_state.last_error = None
 
     if provider == "disabled":
         return None
@@ -41,7 +40,7 @@ def _send_llm_request(
         
     # OpenAI compatibility endpoint (normalize trailing slash)
     if not api_base_url or not isinstance(api_base_url, str):
-        _last_ai_error = "API Base URL is not configured or invalid."
+        _local_ai_state.last_error = "API Base URL is not configured or invalid."
         return None
     endpoint = api_base_url.strip().rstrip('/')
     if not endpoint.endswith('/chat/completions'):
@@ -84,26 +83,29 @@ def _send_llm_request(
                     msg_str = str(msg).strip()
                     if len(msg_str) > 200:
                         msg_str = msg_str[:200] + "..."
-                    _last_ai_error = f"HTTP Error {e.code}: {msg_str}"
+                    _local_ai_state.last_error = f"HTTP Error {e.code}: {msg_str}"
                 else:
                     body_str = raw_body
                     if len(body_str) > 200:
                         body_str = body_str[:200] + "..."
-                    _last_ai_error = f"HTTP Error {e.code}: {body_str}"
+                    _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
             except Exception:
                 body_str = raw_body
                 if len(body_str) > 200:
                     body_str = body_str[:200] + "..."
-                _last_ai_error = f"HTTP Error {e.code}: {body_str}"
+                _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
         except Exception:
             reason_str = str(e.reason).strip()
             if len(reason_str) > 200:
                 reason_str = reason_str[:200] + "..."
-            _last_ai_error = f"HTTP Error {e.code}: {reason_str}"
+            _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"
         return None
     except Exception as e:
-        # Gracefully fail and capture exception
-        _last_ai_error = str(e)
+        # Gracefully fail and capture normalized exception
+        msg = " ".join(str(e).split())
+        if len(msg) > 200:
+            msg = msg[:200] + "..."
+        _local_ai_state.last_error = msg
         return None
 
 def generate_ai_summary(

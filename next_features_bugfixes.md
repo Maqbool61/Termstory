@@ -29,21 +29,24 @@ Enabling history timestamps in shell config files (via `setopt EXTENDED_HISTORY`
 4. **AI Disabled Notification**: When installed fresh, the default AI provider is `"disabled"`, and there was no post-onboarding indication to show how to configure/enable it.
 
 ### Fixes
-- **Detailed AI Error Tracking**:
-  - Implemented module-level error tracking in `termstory/ai.py` using `_last_ai_error` and helper functions `get_last_ai_error()` / `clear_last_ai_error()`.
-  - Updated `_send_llm_request` to clear errors on start and capture exceptions in `_last_ai_error`.
+- **Detailed Thread-Safe AI Error Tracking**:
+  - Implemented module-level error tracking in `termstory/ai.py` using `threading.local()` to maintain separate error states for concurrent @work background threads.
+  - Updated `_send_llm_request` to clear thread-local error state on start and capture exception messages, normalized and truncated to 200 characters to prevent UI clutter.
   - Added specialized handling for `urllib.error.HTTPError` to decode and extract error messages directly from JSON response bodies returned by the LLM providers (e.g., Groq's or OpenAI's API error payloads).
   - Updated `termstory/tui.py`'s single, bulk, and timeframe generation error paths to surface these captured error messages inside notification toasts.
-  - Added unit tests in `tests/test_ai_error_surfacing.py` verifying correct error capture, clearing, and HTTP JSON parsing.
+  - Added unit tests in `tests/test_ai_error_surfacing.py` verifying correct error capture, clearing, HTTP JSON parsing, and concurrent thread isolation.
 - **Interactive AI Onboarding Reminder**:
   - Added a one-time reminder printed to the console when exiting the TUI, gated by `has_seen_onboarding_reminder` flag, showing exactly how to configure the AI provider and set the API key.
   - Registered `"has_seen_onboarding_reminder": False` in config defaults.
+  - Added warning diagnostics to stderr if configuration file saving fails.
   - Added a unit test verifying one-time reminder printing and subsequent suppression.
 - **Git Repository Discovery**:
   - Implemented automatic git project path scanning in `cli.py:run_ingestion()`. Scans up to 2 levels deep in `["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work"]` and 1 level deep in `["~"]` using `glob` to find `.git` folders.
+  - Sorted discovered `project_paths` deterministically to ensure reproducible recovery tie-breaking.
   - Propagated discovered `project_paths` through `parse_all_histories` to `parse_zsh_history`, which passes them to the `TimestampDetective`.
-  - Added unit test in `tests/test_parser.py` validating that the project paths parameter is correctly propagated.
-- **Dynamic Commit Ingestion Timeframe**:
+  - Added unit test in `tests/test_parser.py` validating that the project paths parameter is correctly propagated, with environment variables cleanly cleared via monkeypatch.
+- **Dynamic Commit Ingestion Timeframe & Configurable Timeout**:
   - Updated the git commit ingestion window in `cli.py` to dynamically adjust `since_ts` back to the oldest parsed command's timestamp (minus a 1-day buffer) if older commands exist. This ensures that recovered legacy commands get correct commit linkages.
+  - Added support for a configurable `timeout` parameter inside `get_project_commits()` in `git_integration.py`. If deep history ingestion (older than 90 days) is active, a longer 30-second timeout is assigned to prevent subprocess timeouts in large repositories, keeping the common 90-day fast path capped at 10 seconds.
 
 ---

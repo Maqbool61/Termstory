@@ -106,3 +106,43 @@ def test_http_error_non_json_body_parsing(monkeypatch):
     )
     assert res is None
     assert get_last_ai_error() == "HTTP Error 503: Service Unavailable"
+
+
+def test_concurrent_threads_error_isolation(monkeypatch):
+    import threading
+    import time
+    from termstory.ai import _send_llm_request
+    
+    barrier = threading.Barrier(2)
+    thread_errors = {}
+    
+    def run_thread_a():
+        clear_last_ai_error()
+        barrier.wait()
+        _send_llm_request("prompt", "key", "", "model", "groq")
+        time.sleep(0.1)
+        thread_errors["A"] = get_last_ai_error()
+        
+    def run_thread_b():
+        clear_last_ai_error()
+        
+        def mock_urlopen(req, timeout=None):
+            raise urllib.error.URLError("Connection refused")
+            
+        monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+        
+        barrier.wait()
+        _send_llm_request("prompt", "key", "https://api.groq.com/openai/v1", "model", "groq")
+        time.sleep(0.1)
+        thread_errors["B"] = get_last_ai_error()
+        
+    ta = threading.Thread(target=run_thread_a)
+    tb = threading.Thread(target=run_thread_b)
+    ta.start()
+    tb.start()
+    ta.join()
+    tb.join()
+    
+    assert thread_errors["A"] == "API Base URL is not configured or invalid."
+    assert "Connection refused" in thread_errors["B"]
+

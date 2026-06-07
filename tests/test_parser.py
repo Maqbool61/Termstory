@@ -147,6 +147,7 @@ def test_parse_zsh_history_locking(tmp_path):
     assert commands[1].timestamp == 1748851200
 
 def test_parse_all_histories_project_paths_propagation(monkeypatch, tmp_path):
+    monkeypatch.delenv("TERMSTORY_MISSING_TIMESTAMPS", raising=False)
     temp_file = tmp_path / "zsh_test_history"
     temp_file.write_text("git status\n")
     
