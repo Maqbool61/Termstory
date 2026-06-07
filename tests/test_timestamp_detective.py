@@ -605,11 +605,14 @@ class TestInterpolation(unittest.TestCase):
         self.assertIn("Pre-anchor", result[0]["detected_source"])
 
     def test_suffix_gap_step_forward(self):
-        """Items after the last anchor should be stepped forward 10 seconds each."""
+        """Items after the last anchor should be spread proportionally forward."""
         items = self._make_enriched(1000, None, None)
         result = self.d._interpolate(items)
-        self.assertEqual(result[1]["detected_ts"], 1010)
-        self.assertEqual(result[2]["detected_ts"], 1020)
+        # t_last = 1000, n_suffix = 2, window = 86400.
+        # offset 0: 1000 + (1/3) * 86400 = 29800
+        # offset 1: 1000 + (2/3) * 86400 = 58600
+        self.assertEqual(result[1]["detected_ts"], 29800)
+        self.assertEqual(result[2]["detected_ts"], 58600)
         self.assertIn("Post-anchor", result[1]["detected_source"])
 
     def test_no_anchors_unchanged(self):

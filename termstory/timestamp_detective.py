@@ -39,8 +39,9 @@ This module solves that by running a multi-phase forensic pipeline:
 
         t_i = t_a + (t_b − t_a) × (i − i_a) / (i_b − i_a)
 
-    Commands before the first anchor use a 1-second step-back; commands after the last
-    anchor use a 1-second step-forward.  If no anchors exist at all, the function
+    Commands before the first anchor are proportionally spread to the oldest known
+    repo commit; commands after the last anchor are proportionally spread forward
+    using a minimum 1-day window. If no anchors exist at all, the function
     returns all items unchanged (the parser's existing mtime-based step-back handles
     this fallback).
 
@@ -1079,9 +1080,9 @@ class TimestampDetective:
         Edge cases
         ----------
         • Prefix gap (items before the first anchor):
-            Use 1-second step-back from the first anchor timestamp.
+            Spread proportionally back to the oldest known repository commit.
         • Suffix gap (items after the last anchor):
-            Use 1-second step-forward from the last anchor timestamp.
+            Spread proportionally forward from the last anchor using a minimum 1-day window.
         • No anchors at all:
             Return items unchanged; the parser's mtime step-back handles this.
 
@@ -1177,12 +1178,12 @@ class TimestampDetective:
             i for i in range(last_anchor_idx + 1, n)
             if result[i].get("detected_ts") is None
         ]
-        # Step forward at 10-second intervals from t_last. These commands ran
-        # after the last known anchor and before the user enabled EXTENDED_HISTORY,
-        # so we don't use 'now' as a right bound (semantically wrong).
+        n_suffix = len(suffix_unresolved)
+        window = max(n_suffix * 10, 86400)
         for offset, i in enumerate(suffix_unresolved):
-            result[i]["detected_ts"] = t_last + (offset + 1) * 10
-            result[i]["detected_source"] = f"Post-anchor step-forward (after {src_last})"
+            fraction = (offset + 1) / (n_suffix + 1)
+            result[i]["detected_ts"] = int(t_last + fraction * window)
+            result[i]["detected_source"] = f"Post-anchor proportional spread (after {src_last})"
             result[i]["is_legacy_still"] = True
 
         return result

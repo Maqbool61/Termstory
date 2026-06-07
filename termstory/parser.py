@@ -255,10 +255,10 @@ def parse_zsh_history(
     # Use 10-second steps to match the anchor_time breathing room calculated above.
     # This ensures commands are spread across days, not crammed into one afternoon.
     n_unresolvable = len(unresolvable)
+    window = max(n_unresolvable * 10, 86400)  # at least 1 day
     for idx, item in enumerate(unresolvable):
-        # idx=0 → oldest command: anchor_time - (n_unresolvable - 1) * 10
-        # idx=n-1 → newest command: anchor_time
-        fallback_ts = anchor_time + (idx - n_unresolvable) * 10
+        fraction = idx / max(n_unresolvable, 1)
+        fallback_ts = int((anchor_time - window) + fraction * window)
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
         resolved_commands.append(Command(
             timestamp=resolved_ts,
