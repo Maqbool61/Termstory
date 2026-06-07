@@ -68,19 +68,20 @@ def run_ingestion(db: Database) -> None:
         )
         return
         
-    import glob
-    project_paths = []
-    for root_dir in ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"]:
-        expanded = os.path.expanduser(root_dir)
-        if os.path.isdir(expanded):
-            for git_dir in glob.glob(os.path.join(expanded, "*", ".git")):
-                project_paths.append(os.path.dirname(git_dir))
-            if root_dir != "~":
-                for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
-                    project_paths.append(os.path.dirname(git_dir))
-    project_paths = sorted(set(project_paths))
+    def discover_project_paths():
+        import glob
+        paths = []
+        for root_dir in ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"]:
+            expanded = os.path.expanduser(root_dir)
+            if os.path.isdir(expanded):
+                for git_dir in glob.glob(os.path.join(expanded, "*", ".git")):
+                    paths.append(os.path.dirname(git_dir))
+                if root_dir != "~":
+                    for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
+                        paths.append(os.path.dirname(git_dir))
+        return sorted(set(paths))
 
-    commands = parse_all_histories(history_files, db=db, project_paths=project_paths)
+    commands = parse_all_histories(history_files, db=db, project_paths=discover_project_paths)
     if len(commands) == 0:
         Console(stderr=True).print(
             "\n[bold yellow]⚠️  Warning: Shell history parser returned 0 commands.[/bold yellow]\n"

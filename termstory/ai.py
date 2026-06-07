@@ -76,26 +76,32 @@ def _send_llm_request(
     except urllib.error.HTTPError as e:
         try:
             raw_body = e.read().decode("utf-8").strip()
-            try:
-                err_json = json.loads(raw_body)
-                msg = err_json.get("error", {}).get("message")
-                if msg:
-                    msg_str = str(msg).strip()
-                    if len(msg_str) > 200:
-                        msg_str = msg_str[:200] + "..."
-                    _local_ai_state.last_error = f"HTTP Error {e.code}: {msg_str}"
-                else:
-                    body_str = raw_body
+            if not raw_body:
+                reason_str = " ".join(str(e.reason).split())
+                if len(reason_str) > 200:
+                    reason_str = reason_str[:200] + "..."
+                _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"
+            else:
+                try:
+                    err_json = json.loads(raw_body)
+                    msg = err_json.get("error", {}).get("message")
+                    if msg:
+                        msg_str = " ".join(str(msg).split())
+                        if len(msg_str) > 200:
+                            msg_str = msg_str[:200] + "..."
+                        _local_ai_state.last_error = f"HTTP Error {e.code}: {msg_str}"
+                    else:
+                        body_str = " ".join(raw_body.split())
+                        if len(body_str) > 200:
+                            body_str = body_str[:200] + "..."
+                        _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
+                except Exception:
+                    body_str = " ".join(raw_body.split())
                     if len(body_str) > 200:
                         body_str = body_str[:200] + "..."
                     _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
-            except Exception:
-                body_str = raw_body
-                if len(body_str) > 200:
-                    body_str = body_str[:200] + "..."
-                _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
         except Exception:
-            reason_str = str(e.reason).strip()
+            reason_str = " ".join(str(e.reason).split())
             if len(reason_str) > 200:
                 reason_str = reason_str[:200] + "..."
             _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"

@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union, Callable
 from termstory.models import Command
 from termstory.timestamp_detective import TimestampDetective
 
@@ -16,7 +16,7 @@ def clean_command(cmd_str: str) -> Optional[str]:
 def parse_zsh_history(
     filepath: str,
     existing_lookup: Optional[Dict[str, List[int]]] = None,
-    project_paths: Optional[List[str]] = None
+    project_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None
 ) -> List[Command]:
     """Parse a Zsh history file containing ': <timestamp>:<duration>;<command>' format.
     Handles legacy command lines, timestamped command lines, and multiline command continuations
@@ -188,9 +188,10 @@ def parse_zsh_history(
     # Items that the Detective resolves get is_legacy=False and a recovery_source string.
     # Truly unresolvable items get placed by the classic 1-second step-back below.
     if legacy_items:
+        resolved_paths = project_paths() if callable(project_paths) else project_paths
         detective = TimestampDetective(
             search_root=os.path.expanduser("~"),
-            project_paths=project_paths or []
+            project_paths=resolved_paths or []
         )
         enriched_legacy = detective.resolve_all(legacy_items)
     else:
@@ -276,7 +277,7 @@ def parse_zsh_history(
 def parse_bash_history(
     filepath: str,
     existing_lookup: Optional[Dict[str, List[int]]] = None,
-    project_paths: Optional[List[str]] = None
+    project_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None
 ) -> List[Command]:
     """Parse Bash history. Reads standard commands, using #<timestamp> lines if present, 
     otherwise falls back to spacing command timestamps backward from file modification time.
@@ -426,7 +427,7 @@ def parse_bash_history(
 def parse_all_histories(
     filepaths: List[str],
     db: Optional[Any] = None,
-    project_paths: Optional[List[str]] = None
+    project_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None
 ) -> List[Command]:
     """Parse all listed history files, merge and deduplicate them, and sort by timestamp"""
     existing_lookup = None

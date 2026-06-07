@@ -146,3 +146,64 @@ def test_concurrent_threads_error_isolation(monkeypatch):
     assert thread_errors["A"] == "API Base URL is not configured or invalid."
     assert "Connection refused" in thread_errors["B"]
 
+
+def test_http_error_empty_body_fallback_to_reason(monkeypatch):
+    clear_last_ai_error()
+    
+    def mock_urlopen(req, timeout=None):
+        # Create an HTTPError with an empty body
+        fp = BytesIO(b"")
+        raise urllib.error.HTTPError(
+            url="https://api.groq.com/openai/v1",
+            code=403,
+            msg="Forbidden Request",
+            hdrs={},
+            fp=fp
+        )
+        
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    
+    res = generate_ai_summary(
+        ["pytest tests/"],
+        "test-key",
+        "https://api.groq.com/openai/v1",
+        "llama3",
+        "groq"
+    )
+    assert res is None
+    # e.reason for HTTPError returns the HTTP status message (msg parameter, here "Forbidden Request")
+    assert get_last_ai_error() == "HTTP Error 403: Forbidden Request"
+
+
+def test_http_error_whitespace_normalization(monkeypatch):
+    clear_last_ai_error()
+    
+    def mock_urlopen(req, timeout=None):
+        # Create an HTTPError with messy newlines and extra spaces in json error message
+        body = json.dumps({
+            "error": {
+                "message": "  Something \n   went \n\t wrong.  "
+            }
+        }).encode("utf-8")
+        fp = BytesIO(body)
+        raise urllib.error.HTTPError(
+            url="https://api.groq.com/openai/v1",
+            code=500,
+            msg="Internal Server Error",
+            hdrs={},
+            fp=fp
+        )
+        
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    
+    res = generate_ai_summary(
+        ["pytest tests/"],
+        "test-key",
+        "https://api.groq.com/openai/v1",
+        "llama3",
+        "groq"
+    )
+    assert res is None
+    assert get_last_ai_error() == "HTTP Error 500: Something went wrong."
+
+
