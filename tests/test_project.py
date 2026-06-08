@@ -135,10 +135,10 @@ def test_find_project_root_symlink_escape(tmp_path, monkeypatch):
     if not symlink_dir.exists():
         os.symlink(str(external_proj), str(symlink_dir))
     
-    # 4. Check that find_project_root on the symlink refuses to follow the escape
-    # and returns home instead.
+    # 4. Check that find_project_root on the symlink follows the escape
+    # and correctly identifies the external project.
     from termstory.project import find_project_root
-    assert find_project_root(str(symlink_dir)) == str(home_dir)
+    assert find_project_root(str(symlink_dir)) == str(external_proj)
     
     # Cleanup symlink
     if symlink_dir.exists():

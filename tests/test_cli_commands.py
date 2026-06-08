@@ -447,15 +447,18 @@ def test_safe_init_db_corrupted(tmp_path, monkeypatch, capsys):
     
     db = Database(str(db_file))
     
-    # Override init_db to throw DatabaseError
+    # Override init_db to throw DatabaseError on first call, succeed on second
+    init_calls = []
     def fake_init():
-        raise sqlite3.DatabaseError("database disk image is malformed")
+        init_calls.append(1)
+        if len(init_calls) == 1:
+            raise sqlite3.DatabaseError("database disk image is malformed")
     monkeypatch.setattr(db, "init_db", fake_init)
     
     from termstory.cli import safe_init_db
     import sys
     
-    # Check that it calls sys.exit(1)
+    # Check that it rotates and does NOT exit
     with monkeypatch.context() as m:
         exited = []
         m.setattr(sys, "exit", lambda c: exited.append(c))
@@ -463,8 +466,9 @@ def test_safe_init_db_corrupted(tmp_path, monkeypatch, capsys):
         
         err = capsys.readouterr().err
         assert "Database Corrupted" in err
-        assert len(exited) == 1
-        assert exited[0] == 1
+        assert "Initializing a fresh database" in err
+        assert len(exited) == 0
+        assert len(init_calls) == 2
 
 def test_cli_optimize_command(tmp_path, monkeypatch):
     db_file = tmp_path / "test_cli_optimize.db"
