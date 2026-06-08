@@ -164,15 +164,19 @@ def parse_zsh_history(
     n_legacy_chunks = (n_legacy + CHUNK_SIZE - 1) // CHUNK_SIZE
     legacy_window = max(n_legacy_chunks * 86400, 365 * 86400)
 
+    # To prevent synthetic legacy history from leaking into 'termstory today'
+    # or recent activity, we enforce a strict 30-day buffer from file_mtime.
+    BUFFER_30_DAYS = 30 * 86400
+
     if timestamped_items:
         oldest_ts = min(item["timestamp"] for item in timestamped_items)
         # Push anchor back so the spread window has room behind the oldest real timestamp.
         natural_anchor = oldest_ts - legacy_window
-        anchor_time = min(natural_anchor, file_mtime - 60)
+        anchor_time = min(natural_anchor, file_mtime - BUFFER_30_DAYS - legacy_window)
     else:
         # 100% legacy (no EXTENDED_HISTORY ever): anchor at file mtime pushed back
-        # by the full window duration.
-        anchor_time = file_mtime - legacy_window
+        # by the full window duration + 30 day buffer.
+        anchor_time = file_mtime - BUFFER_30_DAYS - legacy_window
 
     # ── Build the final list of Commands ────────────────────────────────────────
     # Apply the database timestamp-locking lookup so synthetic timestamps are stable
@@ -417,7 +421,8 @@ def parse_bash_history(
         n_cmds = len(temp_commands)
         n_chunks = (n_cmds + CHUNK_SIZE - 1) // CHUNK_SIZE if n_cmds > 0 else 0
         window = max(n_chunks * 86400, 365 * 86400)
-        start_time = mtime - window
+        BUFFER_30_DAYS = 30 * 86400
+        start_time = mtime - BUFFER_30_DAYS - window
         
         last_snapped_base_ts = 0
         current_snapped_base_ts = 0

@@ -105,15 +105,17 @@ def generate_heatmap(sessions: List[Session], days_limit: int = 30) -> str:
 
 def calculate_dashboard_stats(sessions: List[Session], projects: List[Project], days_limit: int = 30) -> Dict[str, Any]:
     """Calculate cumulative dashboard stats."""
+    real_sessions = [s for s in sessions if not getattr(s, "is_legacy", False)]
+    
     active_dates = {
         datetime.fromtimestamp(s.start_time).date()
-        for s in sessions
+        for s in real_sessions
     }
     
-    streak = calculate_streak(sessions)
+    streak = calculate_streak(real_sessions)
     total_seconds = sum(s.duration_seconds for s in sessions)
     total_time_str = format_duration(total_seconds)
-    heatmap = generate_heatmap(sessions, days_limit=days_limit)
+    heatmap = generate_heatmap(real_sessions, days_limit=days_limit)
     
     return {
         "total_time": total_time_str,
