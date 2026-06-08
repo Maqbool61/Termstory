@@ -6,8 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.14] - 2026-06-08
+### Added
+- **Thread Starvation Guards**: Implemented two-factor guards (`exclusive=True` on `@work` and wall-clock timeouts) to prevent thread pool exhaustion from UI requests and hung LLM sockets.
+- **Corrupt DB Fallback**: `safe_init_db` now automatically rotates corrupted SQLite databases to a `.bak` file and transparently reinitializes, preventing app lockups.
+- **Background Async Operations**: Offloaded all heavy UI rendering and API operations to Textual's background `@work(thread=True)` threads to eliminate main-thread freezes.
+
 ### Fixed
+- **SQLite Upgrade Deadlocks**: Eliminated database locking during concurrent reads/writes via explicit `BEGIN IMMEDIATE` transactions and `INSERT OR IGNORE` statements. Also increased connection timeout to 30.0s.
+- **Schema Integrity**: Fixed project path collisions by migrating the `UNIQUE` SQLite constraint in the `projects` table from `name` to `path`.
 - **TUI UI Crash**: Fixed `TypeError` in Python 3.14 by safely casting time variables to integers when rendering the timeline tree.
+- **UI Aesthetic Discipline**: Removed all usages of `rich.panel.Panel` in favor of dense text separators to maintain the flat, screenshot-friendly design philosophy.
 
 ## [0.2.13] - 2026-06-08
 ### Added

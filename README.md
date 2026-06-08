@@ -83,12 +83,12 @@ termstory/
 ├── README.md                    # This document
 ├── DATA_PRIVACY.md              # LLM data handling policy
 ├── termstory/
-│   ├── __init__.py              # Version: 0.2.9
+│   ├── __init__.py              # Version: 0.2.14
 │   ├── __main__.py              # python3 -m termstory entry point
 │   ├── cli.py                   # Typer CLI — all commands & ingestion entry point
 │   ├── tui.py                   # Textual TUI dashboard & all widgets
 │   ├── parser.py                # Shell history parsing engine
-│   ├── timestamp_detective.py   # v0.2.9 — forensic timestamp recovery engine
+│   ├── timestamp_detective.py   # Forensic timestamp recovery engine
 │   ├── session.py               # 30-minute session grouping
 │   ├── project.py               # VCS root detection & project name resolution
 │   ├── git_integration.py       # git log subprocess client & commit cleaner
@@ -113,7 +113,7 @@ termstory/
     ├── test_tui.py
     ├── test_formatter_rich.py
     ├── test_insights.py
-    ├── test_timestamp_detective.py  # v0.2.9 — 155 tests
+    ├── test_timestamp_detective.py
     └── test_integration.py
 ```
 
@@ -203,7 +203,7 @@ Commands older than 5 years or with future timestamps are silently dropped to pr
 
 ---
 
-## 6. The Timestamp Detective (v0.2.9)
+## 6. The Timestamp Detective
 
 > The most significant feature in TermStory's history. If you've been using your terminal for years without `EXTENDED_HISTORY`, your shell history has no dates at all — every command appears to have happened "today". The Timestamp Detective reverse-engineers real timestamps by mining your git log, filesystem metadata, and package manager artifacts.
 
@@ -386,10 +386,13 @@ git -C <repo_root> log --all \
 
 ---
 
-## 9. Database Schema
+## 9. Database Schema & Thread Safety
 
 `~/.termstory/termstory.db` — SQLite with WAL mode (`PRAGMA journal_mode = WAL`).
-Features extensive concurrency safety measures including a 30.0s connection timeout for massive batch ingestion, a `safe_init_db` wrapper to prevent application bricks on `DatabaseError`, and `INSERT OR IGNORE` conflict resolution to prevent race conditions during concurrent pane reads.
+Features extensive concurrency safety measures:
+- **SQLite Deadlock Fixes**: Uses explicit `BEGIN IMMEDIATE` transactions during bulk data ingestion to eliminate upgrade deadlocks and `INSERT OR IGNORE` to mitigate race conditions during concurrent UI reads. Includes a 30.0s connection timeout for massive batch ingestions.
+- **Thread Starvation Guards**: Offloads heavy operations to background threads using Textual's `@work(thread=True)` with `exclusive=True` to prevent thread pool exhaustion. Added a secondary wall-clock threading timeout (`worker_thread.join(timeout + 1.0)`) and circuit breakers in `ai.py` to ensure hung LLM processes cannot freeze the UI.
+- **Corrupt DB Fallback**: `safe_init_db` automatically catches `sqlite3.DatabaseError`, moves the corrupted DB to a `.bak` file, and gracefully reinitializes a fresh database without bricking the application.
 
 ```sql
 CREATE TABLE projects (
@@ -418,7 +421,7 @@ CREATE TABLE commands (
     exit_code       INTEGER,
     session_id      INTEGER REFERENCES sessions(id),
     project_id      INTEGER REFERENCES projects(id),
-    recovery_source TEXT,    -- v0.2.9: Chain of Custody attribution string, NULL for real timestamps
+    recovery_source TEXT,    -- Chain of Custody attribution string, NULL for real timestamps
     created_at      INTEGER DEFAULT (strftime('%s', 'now'))
 );
 

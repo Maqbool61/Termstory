@@ -43,7 +43,8 @@ Enriches shell activity by fetching corresponding Git commits.
 
 ### E. Database Layer ([database.py](file:///Users/himanshuverma/Projects/termstory/termstory/database.py))
 Manages SQLite storage under `~/.termstory/termstory.db`.
-* **WAL Mode & Concurrency**: Executes `PRAGMA journal_mode = WAL;` for non-blocking concurrent reads/writes. Uses a `30.0s` timeout in `sqlite3.connect` to support massive batch ingestions. Initialization is wrapped in `safe_init_db` to catch `DatabaseError` and prevent application bricks. Employs `INSERT OR IGNORE` to mitigate race conditions during concurrent pane reads.
+* **WAL Mode & Concurrency**: Executes `PRAGMA journal_mode = WAL;` for non-blocking concurrent reads/writes. Uses a `30.0s` timeout in `sqlite3.connect` to support massive batch ingestions. Employs explicit `BEGIN IMMEDIATE` transactions during bulk data ingestion to eliminate SQLite Upgrade Deadlocks, and uses `INSERT OR IGNORE` to mitigate race conditions during concurrent UI reads.
+* **Resilience**: Initialization is wrapped in `safe_init_db` which features Corrupt DB fallback logic. If a `DatabaseError` is encountered, it seamlessly renames the corrupted database to a timestamped `.bak` file and initializes a fresh database to prevent application bricking.
 * **Index Strategy**: Optimizes search, TUI loads, and timeline scrolling via:
   - `idx_commands_timestamp` on `commands(timestamp)`
   - `idx_commands_session_id` on `commands(session_id)`
@@ -141,13 +142,16 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - **Safe Exit & Fallback**: Exits gracefully with clear restart instructions if user confirms (`Y`), or continues directly to the legacy TUI fallback if user declines (`N`).
 * **Files**: [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py), [parser.py](file:///Users/himanshuverma/Projects/termstory/termstory/parser.py), [test_cli_commands.py](file:///Users/himanshuverma/Projects/termstory/tests/test_cli_commands.py).
 
-### 🛡️ Phase 9: Concurrency Safety & Schema Integrity Upgrades
+### 🛡️ Phase 9: Advanced Concurrency, Thread-Safety & Resilience
 * **Status**: Fully implemented, integrated, and verified.
 * **Features**:
-  - **Database Concurrency Measures**: Implemented a `30.0s` timeout for massive batch ingestion, a `safe_init_db` `DatabaseError` wrapper to prevent bricks during initialization, and an `INSERT OR IGNORE` fix for race conditions during concurrent pane reads.
+  - **SQLite Upgrade Deadlocks**: Fixed database deadlocks and race conditions during concurrent pane reads by using explicit `BEGIN IMMEDIATE` transactions in `save_data` and widespread `INSERT OR IGNORE` queries. Added a `30.0s` connection timeout for massive batch ingestions.
+  - **Main-Thread Freezing Fixes**: Offloaded heavy UI operations and API calls to background threads using Textual's `@work(thread=True)` workers, eliminating TUI stutters.
+  - **Thread Starvation 2-Factor Guards**: Implemented `exclusive=True` on UI workers to prevent thread pool exhaustion from rapid user inputs. Added a secondary wall-clock threading timeout (`worker_thread.join(timeout + 1.0)`) and circuit breakers in `ai.py` on top of socket timeouts to ensure hung LLM processes cannot consume all threads.
+  - **Corrupt DB Fallback Logic**: Hardened `safe_init_db` in `cli.py` to automatically catch `sqlite3.DatabaseError`. If corruption is detected, it moves the corrupted database to a `.bak` file and transparently reinitializes a fresh database without bricking the application.
   - **Schema Integrity**: Migrated the `UNIQUE` constraint in the `projects` table from `name` to `path` to prevent irreversible fusion of identically named project folders.
   - **UI Philosophy Enforcement**: Reaffirmed the strict ban on `rich.panel.Panel` in favor of dense text separators to ensure the "density over decoration" philosophy remains intact.
-* **Files**: [database.py](file:///Users/himanshuverma/Projects/termstory/termstory/database.py), [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py).
+* **Files**: [database.py](file:///Users/himanshuverma/Projects/termstory/termstory/database.py), [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py), [ai.py](file:///Users/himanshuverma/Projects/termstory/termstory/ai.py), [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py).
 
 ---
 
@@ -171,3 +175,14 @@ Handles Zsh and Bash histories that lack extended timestamps.
 * **Circadian Monotonic Snapping**: Synthetic chunks are forced into a 9 AM - 6 PM weekday window. Weekend timestamps are snapped backwards to Friday afternoon. A monotonic tracker artificially offsets colliding chunks to prevent interleaved session destruction.
 * **30-Day Metric Buffer**: The synthetic timestamp window strictly ends 30 days prior to the history file's modification time. This creates an impenetrable buffer that guarantees legacy commands cannot pollute `termstory today`.
 * **UX Metric Exclusions**: Commands flagged as `is_legacy=True` are explicitly omitted from the TUI Heatmap, Streak counters, and Insights metrics to prevent the illusion of perfect, unbroken coding streaks.
+
+---
+
+## 5. Future Roadmap / R&D
+
+The Expert Tester is currently validating 4 new concepts for the next phase of TermStory development:
+
+1. **SQLite FTS5 Integration**: Leveraging SQLite's Full-Text Search extension to dramatically speed up deep-history string matching and provide ranked search capabilities across sessions, commands, and AI summaries.
+2. **LIFO Debouncing for AI Workers**: Implementing Last-In-First-Out processing and advanced debouncing for UI-triggered AI requests to ensure the active/focused view is prioritized while dropping stale queue items.
+3. **Concurrency Stress Tests & Massive History Simulations**: Hardening the test suite by synthesizing massive, multi-year history logs to simulate and prevent race conditions and lock-ups during worst-case ingestion scenarios.
+4. **Project-Specific AI Contexts**: Enriching LLM summaries by seeding prompt configurations with project-specific context descriptors, readmes, or language contexts to yield more accurate, tailored narratives per repository.

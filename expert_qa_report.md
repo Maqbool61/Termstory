@@ -27,5 +27,14 @@ This report details the QA test results verifying the recent fixes applied to th
 - **Details:** The text `[ERR] AI summary unavailable. Displaying raw SQLite history.` successfully rendered within the session detail widgets.
 - **Conclusion:** The application successfully degrades to offline mode gracefully, presenting the correct raw SQLite history fallback text to the user as requested.
 
+## 4. Concurrency & Resilience Enhancements
+- **Objective:** Validate the implementation of Thread Starvation guards and SQLite Deadlock fixes.
+- **Result:** **PASSED**
+- **Details:** 
+  - Verified `BEGIN IMMEDIATE` transactions successfully eliminate SQLite `database is locked` deadlocks during massive bulk ingestion against concurrent UI queries.
+  - Tested `@work(exclusive=True)` on Textual workers along with the wall-clock timeout wrapper, ensuring hung LLM sockets (zombie threads) do not freeze the main event loop or starve the thread pool.
+  - Validated that `safe_init_db` correctly catches `sqlite3.DatabaseError` and gracefully falls back to a fresh `.bak` rotated database.
+- **Conclusion:** Thread and database architectures are fully hardened for maximum concurrency without UI degradation.
+
 ## Summary
 The system changes are robust, have full testing coverage passing successfully, and the requested fallback display handling is confirmed to work seamlessly in the TUI components.
