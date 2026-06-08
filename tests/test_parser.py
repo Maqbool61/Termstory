@@ -91,13 +91,13 @@ def test_parse_zsh_history_legacy_fallback(tmp_path):
     commands = parse_zsh_history(str(temp_file))
     assert len(commands) == 2
     
-    # 100% legacy branch: anchor_time = file_mtime - max(60, n_legacy * 10)
-    # n_legacy=2, so anchor_time = 1748851220 - max(60, 20) = 1748851220 - 60 = 1748851160
-    # Phase 4 uses proportional spread: window = max(20, 86400) = 86400
-    #   idx=0 (git status): anchor_time - 86400 + 0 = 1748851160 - 86400 = 1748764760
-    #   idx=1 (docker ps):  anchor_time - 86400 + (1/2)*86400 = 1748851160 - 43200 = 1748807960
-    assert commands[0].timestamp == 1748764760
-    assert commands[1].timestamp == 1748807960
+    # 100% legacy branch: anchor_time = file_mtime - max(60, n_legacy * 1728)
+    # n_legacy=2, so anchor_time = 1748851220 - max(60, 3456) = 1748851220 - 3456 = 1748847764
+    # Phase 4: window = max(2*1728, 365*86400) = 31536000
+    #   idx=0 (git status): 1748847764 - 31536000 + 0          = 1717311764
+    #   idx=1 (docker ps):  1748847764 - 31536000 + 0.5*window = 1733079764
+    assert commands[0].timestamp == 1717311764
+    assert commands[1].timestamp == 1733079764
     assert commands[0].command == "git status"
     assert commands[1].command == "docker ps"
 
@@ -116,21 +116,21 @@ def test_parse_zsh_history_hybrid_mode(tmp_path):
     assert len(commands) == 4
     
     # Hybrid branch: oldest_ts = 1748851200, n_legacy = 2
-    # natural_anchor = 1748851200 - max(60, 2*10) = 1748851200 - 60 = 1748851140
-    # file_mtime is ~now (set by tmp_path write) so file_mtime - 60 >> 1748851140
-    # anchor_time = min(1748851140, file_mtime - 60) = 1748851140
-    # Phase 4 uses proportional spread: window = max(20, 86400) = 86400
-    #   idx=0 (git pull):   anchor_time - 86400 + 0 = 1748851140 - 86400 = 1748764740
-    #   idx=1 (git status): anchor_time - 86400 + (1/2)*86400 = 1748851140 - 43200 = 1748807940
+    # natural_anchor = 1748851200 - max(60, 2*1728) = 1748851200 - 3456 = 1748847744
+    # file_mtime is ~now (set by tmp_path write) so file_mtime - 60 >> 1748847744
+    # anchor_time = min(1748847744, file_mtime - 60) = 1748847744
+    # Phase 4: window = max(2*1728, 365*86400) = 31536000
+    #   idx=0 (git pull):   1748847744 - 31536000 + 0          = 1717311744
+    #   idx=1 (git status): 1748847744 - 31536000 + 0.5*window = 1733079744
     assert commands[0].command == "git pull"
-    assert commands[0].timestamp == 1748764740
-    
+    assert commands[0].timestamp == 1717311744
+
     assert commands[1].command == "git status"
-    assert commands[1].timestamp == 1748807940
-    
+    assert commands[1].timestamp == 1733079744
+
     assert commands[2].command == "git commit -m 'feat'"
     assert commands[2].timestamp == 1748851200
-    
+
     assert commands[3].command == "git push"
     assert commands[3].timestamp == 1748851210
 
@@ -159,8 +159,9 @@ def test_parse_zsh_history_legacy_spread(tmp_path):
     latest   = max(c.timestamp for c in legacy_cmds)
     span = latest - earliest
 
-    # With fraction = idx / 500, max fraction is 499/500, so span is 86400 * (499/500) = 86227
-    assert span >= 86227, f"Legacy commands should span almost exactly one day, got {span}s"
+    # window = max(500*1728, 365*86400) = 31536000 (1-year floor)
+    # span ≈ 31536000 * (499/500) ≈ 31472928 — well over 30 days
+    assert span > 30 * 86400, f"Legacy commands should span more than 30 days, got {span}s"
 
 def test_parse_zsh_history_locking(tmp_path):
     temp_file = tmp_path / "zsh_locking_test"

@@ -162,16 +162,14 @@ def parse_zsh_history(
 
     if timestamped_items:
         oldest_ts = min(item["timestamp"] for item in timestamped_items)
-        # Push anchor back so 1-second steps don't cram everything into one day.
-        # Give each legacy command at least 10 seconds of breathing room.
-        # min() here picks the further-back timestamp (i.e. the older of the two),
-        # ensuring we never anchor later than file_mtime - 60.
-        natural_anchor = oldest_ts - max(60, n_legacy * 10)
+        # Push anchor back so the spread window has room behind the oldest real timestamp.
+        # Assume ~50 commands/day average (86400 / 50 = 1728 seconds per command).
+        natural_anchor = oldest_ts - max(60, n_legacy * 1728)
         anchor_time = min(natural_anchor, file_mtime - 60)
     else:
         # 100% legacy (no EXTENDED_HISTORY ever): anchor at file mtime pushed back
-        # by 10 seconds per legacy command so they spread across multiple days.
-        anchor_time = file_mtime - max(60, n_legacy * 10)
+        # by 1728 seconds per legacy command so they spread across many days.
+        anchor_time = file_mtime - max(60, n_legacy * 1728)
 
     # ── Build the final list of Commands ────────────────────────────────────────
     # Apply the database timestamp-locking lookup so synthetic timestamps are stable
@@ -252,10 +250,11 @@ def parse_zsh_history(
         ))
 
     # ── Phase 4: Step-back for truly unresolvable (no anchors found at all) ──────
-    # Use 10-second steps to match the anchor_time breathing room calculated above.
-    # This ensures commands are spread across days, not crammed into one afternoon.
+    # Spread proportionally across a realistic window based on ~50 cmds/day average.
     n_unresolvable = len(unresolvable)
-    window = max(n_unresolvable * 10, 86400)  # at least 1 day
+    # Assume ~50 commands/day on average (86400 / 50 = 1728 seconds per command).
+    # Floor at 1 year so even small histories aren't crammed into one day.
+    window = max(n_unresolvable * 1728, 365 * 86400)
     for idx, item in enumerate(unresolvable):
         fraction = idx / max(n_unresolvable, 1)
         fallback_ts = int((anchor_time - window) + fraction * window)
