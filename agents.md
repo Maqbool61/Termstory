@@ -8,7 +8,7 @@ This file serves as the active development state, architectural roadmap, and des
 
 TermStory is **not** a tracking tool, productivity auditor, or a generic manager dashboard. It is a **personal developer memory engine** designed to trigger recognition.
 * **Recognize, don't inspect**: Optimize for recognition ("What did I work on?"). Details ("How do you know?") belong in `--detailed` mode.
-* **Density over decoration**: Avoid rounded panels, double borders, or nested boxes. Use clean column alignment, simple tables, and minimal spacing.
+* **Density over decoration**: Avoid rounded panels, double borders, or nested boxes. Use clean column alignment, simple tables, and minimal spacing. There is a strict ban on `rich.panel.Panel` in favor of dense text separators to maintain this philosophy.
 * **Screenshot-friendly**: Every screen should fit in a single terminal screen/screenshot and tell a compelling story about a developer's day, search, or project.
 * **Map General to Other**: "General / No Project" or empty project names are mapped to `"Other"`.
 * **Noise Filtering**: Filter out routine navigation, status, and inspection commands (like `cd`, `ls`, `docker ps`, `git status`, `docker logs`, `grep`, etc.) so only creative/memorable work remains.
@@ -43,7 +43,7 @@ Enriches shell activity by fetching corresponding Git commits.
 
 ### E. Database Layer ([database.py](file:///Users/himanshuverma/Projects/termstory/termstory/database.py))
 Manages SQLite storage under `~/.termstory/termstory.db`.
-* **WAL Mode**: Executes `PRAGMA journal_mode = WAL;` for non-blocking concurrent reads/writes.
+* **WAL Mode & Concurrency**: Executes `PRAGMA journal_mode = WAL;` for non-blocking concurrent reads/writes. Uses a `30.0s` timeout in `sqlite3.connect` to support massive batch ingestions. Initialization is wrapped in `safe_init_db` to catch `DatabaseError` and prevent application bricks. Employs `INSERT OR IGNORE` to mitigate race conditions during concurrent pane reads.
 * **Index Strategy**: Optimizes search, TUI loads, and timeline scrolling via:
   - `idx_commands_timestamp` on `commands(timestamp)`
   - `idx_commands_session_id` on `commands(session_id)`
@@ -141,6 +141,14 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - **Safe Exit & Fallback**: Exits gracefully with clear restart instructions if user confirms (`Y`), or continues directly to the legacy TUI fallback if user declines (`N`).
 * **Files**: [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py), [parser.py](file:///Users/himanshuverma/Projects/termstory/termstory/parser.py), [test_cli_commands.py](file:///Users/himanshuverma/Projects/termstory/tests/test_cli_commands.py).
 
+### 🛡️ Phase 9: Concurrency Safety & Schema Integrity Upgrades
+* **Status**: Fully implemented, integrated, and verified.
+* **Features**:
+  - **Database Concurrency Measures**: Implemented a `30.0s` timeout for massive batch ingestion, a `safe_init_db` `DatabaseError` wrapper to prevent bricks during initialization, and an `INSERT OR IGNORE` fix for race conditions during concurrent pane reads.
+  - **Schema Integrity**: Migrated the `UNIQUE` constraint in the `projects` table from `name` to `path` to prevent irreversible fusion of identically named project folders.
+  - **UI Philosophy Enforcement**: Reaffirmed the strict ban on `rich.panel.Panel` in favor of dense text separators to ensure the "density over decoration" philosophy remains intact.
+* **Files**: [database.py](file:///Users/himanshuverma/Projects/termstory/termstory/database.py), [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py).
+
 ---
 
 ## 4. Running Verification
@@ -156,3 +164,10 @@ python3 -m termstory.cli project termstory
 python3 -m termstory.cli insights
 python3 -m termstory.cli ui
 ```
+
+### H. Legacy History Interpolation Engine
+Handles Zsh and Bash histories that lack extended timestamps.
+* **Session-Preserving Burst Clustering**: Groups un-timestamped commands into chunks of 20. Interpolates chunks historically while keeping internal chunk commands precisely 10 seconds apart, ensuring they naturally fuse into coherent TermStory sessions.
+* **Circadian Monotonic Snapping**: Synthetic chunks are forced into a 9 AM - 6 PM weekday window. Weekend timestamps are snapped backwards to Friday afternoon. A monotonic tracker artificially offsets colliding chunks to prevent interleaved session destruction.
+* **30-Day Metric Buffer**: The synthetic timestamp window strictly ends 30 days prior to the history file's modification time. This creates an impenetrable buffer that guarantees legacy commands cannot pollute `termstory today`.
+* **UX Metric Exclusions**: Commands flagged as `is_legacy=True` are explicitly omitted from the TUI Heatmap, Streak counters, and Insights metrics to prevent the illusion of perfect, unbroken coding streaks.

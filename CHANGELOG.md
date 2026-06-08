@@ -5,7 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.13] - 2026-06-08
+### Added
+- **Session-Preserving Burst Clustering**: Legacy shell history lacking timestamps is now grouped into 20-command chunks spaced realistically to preserve TermStory's 30-minute session grouping architecture.
+- **Circadian Snapping**: Synthetic legacy chunks are snapped to working hours (9 AM - 6 PM) and strictly backwards to Friday if falling on a weekend, maintaining realistic timeline metrics.
+- **30-Day Buffer Bounds**: A strict 30-day buffer isolates synthetic legacy history from `termstory today` and recent active timelines, preventing 5-year-old commands from leaking into the present.
+- **Metric Exclusions**: Legacy commands (`is_legacy=True`) are now excluded from the GitHub-style Activity Heatmap, "Current Streak" calculations, and `termstory insights` active day metrics to prevent artificial inflation.
+- **Legacy Badging**: Synthetic chunks are now explicitly labeled with `[Legacy Archive]` in all TUI and CLI outputs.
+- **Shell Support**: Added Fish and PowerShell history format parsing.
+- **Maintenance Command**: Added `termstory optimize` command to vacuum the SQLite database and maintain index performance.
+- **TUI Visuals**: Added UI resizing responsiveness and "Copied" flash visual feedback upon clipboard copy.
+- **Symlink Protection**: Added cyclic symlink detection and network path (NFS/SMB) escape protections in the project discovery engine.
+- **Multiplexer Support**: Upgraded session tracking to gracefully embrace interleaved TTY sessions, preventing Tmux/Zellij pane splits from fracturing sessions.
+- **Test Coverage**: Increased core test coverage to 75%, targeting `config`, `cli`, and `sanitizer` edge cases.
+
+
 
 ## [0.2.12] - 2026-06-08
 

@@ -38,7 +38,7 @@ termstory ui
 TermStory is **not** a tracking tool, a productivity auditor, or a corporate analytics dashboard. It is a **personal developer memory engine** built on three ideas:
 
 - **Recognize, don't inspect.** The goal is instant recognition — *"Ah, that was the day I fought the Docker networking bug"* — not a wall of `cd` and `ls` entries. Noise commands are filtered automatically.
-- **Density over decoration.** No rounded panels, no double borders, no empty margins. Clean column alignment, tight spacing, information-first.
+- **Density over decoration.** No rounded panels, no double borders, no empty margins. Clean column alignment, tight spacing, information-first. There is a strict ban on `rich.panel.Panel` in favor of dense text separators.
 - **Screenshot-friendly.** Every view fits in one terminal screen and tells a complete, self-contained story.
 
 ---
@@ -189,8 +189,13 @@ If you recently enabled `EXTENDED_HISTORY`, your `~/.zsh_history` contains a mix
 - **Timestamp Locking**: On subsequent runs, synthetic timestamps are looked up in the database and re-used to prevent legacy commands from shifting dates.
 
 ### Bash — HISTTIMEFORMAT
-
 If `HISTTIMEFORMAT` is set, Bash writes `#<timestamp>` headers before each command. The parser associates each command with its preceding timestamp header. Without headers, timestamps are spaced 10 seconds apart backward from the file's `mtime`.
+
+### Fish & PowerShell
+Fish (`~/.local/share/fish/fish_history`) and PowerShell (`(Get-PSReadLineOption).HistorySavePath`) formats are natively supported. TermStory dynamically discovers active history file formats and reads timestamped blocks or falls back to legacy interpolation when headers are absent.
+
+### Terminal Multiplexer Resilience
+TermStory's parser intelligently strips injected `PROMPT_COMMAND` hooks and escape sequences left by multiplexers like Tmux, Zellij, and Kitty. Session boundaries natively embrace interleaved TTY sessions instead of artificially fracturing your timeline.
 
 ### Filtering
 
@@ -358,6 +363,8 @@ Result: "termstory"
 
 **Fallback strictness:** If a directory is not inside a standard project root (`~/Projects/`, `~/src/`, etc.) and has no VCS markers, it maps to the user's home directory and is grouped under `"Other"`. This prevents `~/.ssh`, `~/Downloads`, or `/tmp` from polluting the project list.
 
+**Symlink Protection:** TermStory safely traverses symlinks while preventing infinite recursive loops and stalling on stale network mounts (like NFS/SMB).
+
 ---
 
 ## 8. Git Commit Correlation
@@ -382,12 +389,13 @@ git -C <repo_root> log --all \
 ## 9. Database Schema
 
 `~/.termstory/termstory.db` — SQLite with WAL mode (`PRAGMA journal_mode = WAL`).
+Features extensive concurrency safety measures including a 30.0s connection timeout for massive batch ingestion, a `safe_init_db` wrapper to prevent application bricks on `DatabaseError`, and `INSERT OR IGNORE` conflict resolution to prevent race conditions during concurrent pane reads.
 
 ```sql
 CREATE TABLE projects (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT NOT NULL UNIQUE,
-    path        TEXT,
+    name        TEXT NOT NULL,
+    path        TEXT UNIQUE,
     first_seen  INTEGER,
     last_seen   INTEGER,
     created_at  INTEGER DEFAULT (strftime('%s', 'now'))
@@ -518,6 +526,11 @@ Launch with `termstory ui`.
 └───────────────────────────────┴─────────────────────────────────────────────┘
   ?:help  /:search  o:ai-config  c:copy  q:quit
 ```
+
+### TUI Features
+
+- **Responsive Resizing:** The layout gracefully reflows if you resize your terminal window.
+- **Copy Feedback:** Visual "Copied" flash animations when using the `c` clipboard shortcut.
 
 ### Layout
 
@@ -679,6 +692,12 @@ termstory 2026-05-15                 # Specific date
 termstory --date 2026-05-15 week     # Week containing that date
 ```
 
+### Maintenance
+
+```bash
+termstory optimize                   # Vacuum SQLite database and rebuild indexes
+```
+
 ---
 
 ## 15. Configuration
@@ -800,3 +819,9 @@ MIT © TermStory Contributors
 
 **GitHub:** https://github.com/bitflicker64/Termstory  
 **PyPI:** https://pypi.org/project/termstory/
+
+### 🕰️ Legacy Archive & Missing Timestamps
+TermStory shines brightest when your shell logs timestamps (e.g., `setopt EXTENDED_HISTORY` in Zsh). However, if TermStory encounters ancient history lacking timestamps, it engages the **Legacy Interpolation Engine**:
+- **Burst Clustering**: Commands are grouped into chunks that preserve coherent terminal sessions.
+- **Circadian Snapping**: Synthetic dates are mathematically constrained to standard working hours on weekdays, ensuring your timeline looks realistic.
+- **Metric Exclusion**: Synthetic `[Legacy Archive]` commands are deliberately excluded from your Activity Heatmap and Streaks, so your "Perfect Coding Streaks" remain 100% authentic.
