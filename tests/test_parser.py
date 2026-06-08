@@ -68,13 +68,10 @@ def test_parse_bash_history_without_timestamps(tmp_path):
     
     commands = parse_bash_history(str(temp_file))
     assert len(commands) == 2
-    # Commands should be spaced out backward from mtime (which is 1748851220)
-    # len(temp_commands) is 2, so start_time is mtime - 2 * 10 = 1748851200
-    # idx 0: 1748851200
-    # idx 1: 1748851210
-    assert commands[0].timestamp == 1748851200
+    # With session clustering, they are in the same chunk and exactly 10s apart.
+    assert commands[1].timestamp - commands[0].timestamp == 10
+    assert commands[0].timestamp < known_mtime - 31536000 + 86400*3
     assert commands[0].command == "git status"
-    assert commands[1].timestamp == 1748851210
     assert commands[1].command == "docker ps"
 
 def test_parse_zsh_history_legacy_fallback(tmp_path):
@@ -91,13 +88,11 @@ def test_parse_zsh_history_legacy_fallback(tmp_path):
     commands = parse_zsh_history(str(temp_file))
     assert len(commands) == 2
     
-    # 100% legacy branch: anchor_time = file_mtime - max(365*86400, n_legacy * 1728)
-    # n_legacy=2, so anchor_time = 1748851220 - 31536000 = 1717315220
-    # Phase 4: window = max(2*1728, 365*86400) = 31536000
-    #   idx=0 (git status): 1717315220 + 0          = 1717315220
-    #   idx=1 (docker ps):  1717315220 + 0.5*window = 1733083220
-    assert commands[0].timestamp == 1717315220
-    assert commands[1].timestamp == 1733083220
+    # With session clustering, they are in the same chunk (CHUNK_SIZE=20)
+    # So they should be exactly 10 seconds apart
+    assert commands[1].timestamp - commands[0].timestamp == 10
+    # And their base timestamp should have been snapped back by ~1 year
+    assert commands[0].timestamp < known_mtime - 31536000 + 86400*3
     assert commands[0].command == "git status"
     assert commands[1].command == "docker ps"
 
@@ -115,18 +110,11 @@ def test_parse_zsh_history_hybrid_mode(tmp_path):
     commands = parse_zsh_history(str(temp_file))
     assert len(commands) == 4
     
-    # Hybrid branch: oldest_ts = 1748851200, n_legacy = 2
-    # natural_anchor = 1748851200 - max(365*86400, 2*1728) = 1748851200 - 31536000 = 1717315200
-    # file_mtime is ~now (set by tmp_path write) so file_mtime - 60 >> 1717315200
-    # anchor_time = min(1717315200, file_mtime - 60) = 1717315200
-    # Phase 4: window = max(2*1728, 365*86400) = 31536000
-    #   idx=0 (git pull):   1717315200 + 0          = 1717315200
-    #   idx=1 (git status): 1717315200 + 0.5*window = 1733083200
+    # With session clustering, they are in the same chunk
+    assert commands[1].timestamp - commands[0].timestamp == 10
+    assert commands[0].timestamp < 1748851200 - 31536000 + 86400*3
     assert commands[0].command == "git pull"
-    assert commands[0].timestamp == 1717315200
-
     assert commands[1].command == "git status"
-    assert commands[1].timestamp == 1733083200
 
     assert commands[2].command == "git commit -m 'feat'"
     assert commands[2].timestamp == 1748851200

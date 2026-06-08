@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Union, Callable
 from termstory.models import Command
 from termstory.timestamp_detective import TimestampDetective
@@ -160,16 +160,19 @@ def parse_zsh_history(
 
     n_legacy = len(legacy_items)
 
+    CHUNK_SIZE = 20
+    n_legacy_chunks = (n_legacy + CHUNK_SIZE - 1) // CHUNK_SIZE
+    legacy_window = max(n_legacy_chunks * 86400, 365 * 86400)
+
     if timestamped_items:
         oldest_ts = min(item["timestamp"] for item in timestamped_items)
         # Push anchor back so the spread window has room behind the oldest real timestamp.
-        # Assume ~50 commands/day average (86400 / 50 = 1728 seconds per command).
-        natural_anchor = oldest_ts - max(365 * 86400, n_legacy * 1728)
+        natural_anchor = oldest_ts - legacy_window
         anchor_time = min(natural_anchor, file_mtime - 60)
     else:
         # 100% legacy (no EXTENDED_HISTORY ever): anchor at file mtime pushed back
-        # by 1728 seconds per legacy command so they spread across many days.
-        anchor_time = file_mtime - max(365 * 86400, n_legacy * 1728)
+        # by the full window duration.
+        anchor_time = file_mtime - legacy_window
 
     # ── Build the final list of Commands ────────────────────────────────────────
     # Apply the database timestamp-locking lookup so synthetic timestamps are stable
@@ -250,14 +253,35 @@ def parse_zsh_history(
         ))
 
     # ── Phase 4: Step-back for truly unresolvable (no anchors found at all) ──────
-    # Spread proportionally across a realistic window based on ~50 cmds/day average.
+    # Session-Preserving Burst Clustering:
+    # Group commands into chunks to form synthetic sessions, snap the chunks to
+    # working hours (weekdays, 9 AM - 6 PM), and separate internal commands by 10s.
     n_unresolvable = len(unresolvable)
-    # Assume ~50 commands/day on average (86400 / 50 = 1728 seconds per command).
-    # Floor at 1 year so even small histories aren't crammed into one day.
-    window = max(n_unresolvable * 1728, 365 * 86400)
+    n_chunks = (n_unresolvable + CHUNK_SIZE - 1) // CHUNK_SIZE if n_unresolvable > 0 else 0
+    window = max(n_chunks * 86400, 365 * 86400)
+
     for idx, item in enumerate(unresolvable):
-        fraction = idx / max(n_unresolvable, 1)
-        fallback_ts = int(anchor_time + fraction * window)
+        chunk_idx = idx // CHUNK_SIZE
+        intra_chunk_idx = idx % CHUNK_SIZE
+
+        fraction = chunk_idx / max(n_chunks, 1)
+        chunk_base_ts = int(anchor_time + fraction * window)
+
+        # Snap the base timestamp of the chunk to a valid working hour
+        dt = datetime.fromtimestamp(chunk_base_ts)
+        if dt.weekday() >= 5:  # Saturday or Sunday
+            dt += timedelta(days=(7 - dt.weekday()))
+            dt = dt.replace(hour=10, minute=0, second=0)
+        
+        if dt.hour < 9:
+            dt = dt.replace(hour=10, minute=0, second=0)
+        elif dt.hour >= 18:
+            dt = dt.replace(hour=16, minute=0, second=0)
+
+        snapped_base_ts = int(dt.timestamp())
+        
+        # 10 seconds between commands within a chunk
+        fallback_ts = snapped_base_ts + (intra_chunk_idx * 10)
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
         resolved_commands.append(Command(
             timestamp=resolved_ts,
@@ -380,12 +404,31 @@ def parse_bash_history(
 
     if not has_any_timestamps:
         # None of the commands have timestamps (standard Bash default setup)
+        CHUNK_SIZE = 20
         n_cmds = len(temp_commands)
-        window = max(n_cmds * 1728, 365 * 86400)
-        start_time = mtime - max(365 * 86400, n_cmds * 1728)
+        n_chunks = (n_cmds + CHUNK_SIZE - 1) // CHUNK_SIZE if n_cmds > 0 else 0
+        window = max(n_chunks * 86400, 365 * 86400)
+        start_time = mtime - window
+        
         for idx, (t, cmd) in enumerate(temp_commands):
-            fraction = idx / max(n_cmds, 1)
-            fallback_ts = int(start_time + fraction * window)
+            chunk_idx = idx // CHUNK_SIZE
+            intra_chunk_idx = idx % CHUNK_SIZE
+
+            fraction = chunk_idx / max(n_chunks, 1)
+            chunk_base_ts = int(start_time + fraction * window)
+
+            dt = datetime.fromtimestamp(chunk_base_ts)
+            if dt.weekday() >= 5:
+                dt += timedelta(days=(7 - dt.weekday()))
+                dt = dt.replace(hour=10, minute=0, second=0)
+            
+            if dt.hour < 9:
+                dt = dt.replace(hour=10, minute=0, second=0)
+            elif dt.hour >= 18:
+                dt = dt.replace(hour=16, minute=0, second=0)
+
+            snapped_base_ts = int(dt.timestamp())
+            fallback_ts = snapped_base_ts + (intra_chunk_idx * 10)
             resolved_ts = resolve_timestamp(cmd, fallback_ts)
             commands_to_return.append(Command(
                 timestamp=resolved_ts,
