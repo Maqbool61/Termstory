@@ -96,6 +96,13 @@ class Database:
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
+                
+        # v0.3.0: Add is_legacy column to commands so we can skip them in stats.
+        try:
+            cursor.execute("ALTER TABLE commands ADD COLUMN is_legacy BOOLEAN DEFAULT 0;")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
             
         # Create macro_summaries table if not exists
         cursor.execute("""
@@ -233,6 +240,7 @@ class Database:
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE;")
             
             # --- 1. Save Projects ---
             # Capture the temporary python project IDs first (grouping by path)
@@ -353,7 +361,7 @@ class Database:
                 min_ts = min(cmd.timestamp for cmd in commands)
                 max_ts = max(cmd.timestamp for cmd in commands)
                 cursor.execute("""
-                    SELECT timestamp, command, id, exit_code, session_id, project_id, recovery_source
+                    SELECT timestamp, command, id, exit_code, session_id, project_id, recovery_source, is_legacy
                     FROM commands
                     WHERE timestamp >= ? AND timestamp <= ?
                 """, (min_ts, max_ts))
@@ -363,7 +371,8 @@ class Database:
                         "exit_code": row[3],
                         "session_id": row[4],
                         "project_id": row[5],
-                        "recovery_source": row[6]
+                        "recovery_source": row[6],
+                        "is_legacy": row[7]
                     } for row in cursor.fetchall()
                 }
             else:
@@ -375,6 +384,7 @@ class Database:
             for cmd in commands:
                 key = (cmd.timestamp, cmd.command)
                 recovery_src = getattr(cmd, "recovery_source", None)
+                is_legacy = getattr(cmd, "is_legacy", False)
                 if key in db_cmds:
                     db_c = db_cmds[key]
                     cmd.id = db_c["id"]
@@ -385,26 +395,27 @@ class Database:
                         or db_c["session_id"] != cmd.session_id
                         or db_c["project_id"] != cmd.project_id
                         or (recovery_src and db_c["recovery_source"] != recovery_src)
+                        or db_c["is_legacy"] != is_legacy
                     ):
                         commands_to_update.append(
-                            (cmd.exit_code, cmd.session_id, cmd.project_id, recovery_src, db_c["id"])
+                            (cmd.exit_code, cmd.session_id, cmd.project_id, recovery_src, is_legacy, db_c["id"])
                         )
                 else:
                     # New command — include recovery_source from the Detective
                     new_commands_to_insert.append(
                         (cmd.timestamp, cmd.command, cmd.exit_code,
-                         cmd.session_id, cmd.project_id, recovery_src)
+                         cmd.session_id, cmd.project_id, recovery_src, is_legacy)
                     )
 
             if new_commands_to_insert:
                 cursor.executemany("""
-                    INSERT OR IGNORE INTO commands (timestamp, command, exit_code, session_id, project_id, recovery_source)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO commands (timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, new_commands_to_insert)
 
             if commands_to_update:
                 cursor.executemany("""
-                    UPDATE commands SET exit_code = ?, session_id = ?, project_id = ?, recovery_source = ? WHERE id = ?
+                    UPDATE commands SET exit_code = ?, session_id = ?, project_id = ?, recovery_source = ?, is_legacy = ? WHERE id = ?
                 """, commands_to_update)
                 
             # Prune legacy duplicate sessions that became orphaned (have no commands)
@@ -445,7 +456,7 @@ class Database:
                 # 2. Fetch all commands for this session, including recovery_source
                 # so the Chain of Custody tooltip can be displayed in the TUI.
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
@@ -454,7 +465,7 @@ class Database:
 
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
@@ -462,10 +473,12 @@ class Database:
                         exit_code=exit_code,
                         session_id=s_id,
                         project_id=cmd_p_id,
-                        recovery_source=rec_src
+                        recovery_source=rec_src,
+                        is_legacy=bool(is_legacy)
                     ))
                     
                 # 3. Fetch all commits for this session (5m pre, 10m post buffers)
+                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
                 commits = []
                 if p_id is not None:
                     cursor.execute("""
@@ -490,7 +503,8 @@ class Database:
                     project_id=p_id,
                     commands=commands,
                     commits=commits,
-                    ai_summary=ai_sum
+                    ai_summary=ai_sum,
+                    is_legacy=is_session_legacy
                 ))
         finally:
             conn.close()
@@ -561,7 +575,7 @@ class Database:
                 
                 # Fetch commands including recovery_source for Chain of Custody
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
@@ -570,7 +584,7 @@ class Database:
 
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
@@ -578,10 +592,12 @@ class Database:
                         exit_code=exit_code,
                         session_id=s_id,
                         project_id=cmd_p_id,
-                        recovery_source=rec_src
+                        recovery_source=rec_src,
+                        is_legacy=bool(is_legacy)
                     ))
                     
                 # Fetch commits (with buffers)
+                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
                 commits = []
                 if p_id is not None:
                     cursor.execute("""
@@ -606,7 +622,8 @@ class Database:
                     project_id=p_id,
                     commands=commands,
                     commits=commits,
-                    ai_summary=ai_sum
+                    ai_summary=ai_sum,
+                    is_legacy=is_session_legacy
                 ))
         finally:
             conn.close()
@@ -632,7 +649,7 @@ class Database:
     
                 
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
@@ -641,7 +658,7 @@ class Database:
 
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
@@ -649,10 +666,12 @@ class Database:
                         exit_code=exit_code,
                         session_id=s_id,
                         project_id=cmd_p_id,
-                        recovery_source=rec_src
+                        recovery_source=rec_src,
+                        is_legacy=bool(is_legacy)
                     ))
                     
                 # 3. Fetch all commits for this session (5m pre, 10m post buffers)
+                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
                 commits = []
                 if p_id is not None:
                     cursor.execute("""
@@ -677,7 +696,8 @@ class Database:
                     project_id=p_id,
                     commands=commands,
                     commits=commits,
-                    ai_summary=ai_sum
+                    ai_summary=ai_sum,
+                    is_legacy=is_session_legacy
                 ))
         finally:
             conn.close()
@@ -703,7 +723,7 @@ class Database:
     
                 
                 cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source
+                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
                     FROM commands
                     WHERE session_id = ?
                     ORDER BY timestamp ASC
@@ -712,7 +732,7 @@ class Database:
 
                 commands = []
                 for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src = c_row
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
                     commands.append(Command(
                         id=c_id,
                         timestamp=timestamp,
@@ -720,10 +740,12 @@ class Database:
                         exit_code=exit_code,
                         session_id=s_id,
                         project_id=cmd_p_id,
-                        recovery_source=rec_src
+                        recovery_source=rec_src,
+                        is_legacy=bool(is_legacy)
                     ))
                     
                 # 3. Fetch all commits for this session (5m pre, 10m post buffers)
+                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
                 commits = []
                 if p_id is not None:
                     cursor.execute("""
@@ -748,7 +770,8 @@ class Database:
                     project_id=p_id,
                     commands=commands,
                     commits=commits,
-                    ai_summary=ai_sum
+                    ai_summary=ai_sum,
+                    is_legacy=is_session_legacy
                 ))
         finally:
             conn.close()

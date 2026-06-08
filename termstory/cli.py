@@ -26,14 +26,23 @@ def safe_init_db(db: Database) -> None:
     try:
         db.init_db()
     except sqlite3.DatabaseError as e:
-        if "malformed" in str(e).lower():
+        import time
+        db_path = db.db_path
+        if os.path.exists(db_path):
+            backup_path = f"{db_path}.corrupt.{int(time.time())}.bak"
+            os.rename(db_path, backup_path)
             Console(stderr=True).print(
-                "\n[bold red]Database Corrupted[/bold red]\n"
-                "Your TermStory database is corrupted. Please run `termstory reset` to fix it."
+                f"\n[bold yellow]Database Corrupted[/bold yellow]\n"
+                f"Your TermStory database was corrupted. It has been moved to {backup_path}.\n"
+                "Initializing a fresh database..."
+            )
+            db.init_db()
+        else:
+            Console(stderr=True).print(
+                "\n[bold red]Database Error[/bold red]\n"
+                f"Could not initialize database: {e}"
             )
             sys.exit(1)
-        else:
-            raise
 
 def intercept_sys_argv():
     """Intercept positional date arguments (e.g. termstory 2026-06-02) and rewrite them
@@ -259,20 +268,46 @@ def cleanup_shell_marker():
 def perform_reset():
     """Reset all TermStory state, configuration, and database files on disk"""
     import shutil
+    import os
     from termstory.config import get_app_dir
-    dirs_to_clean = {get_app_dir("config"), get_app_dir("data")}
+
+    dirs_to_clean = set()
+
+    # 1. Legacy directory
+    dirs_to_clean.add(os.path.expanduser("~/.termstory"))
+
+    # 2. Currently resolved app directories
+    dirs_to_clean.add(get_app_dir("config"))
+    dirs_to_clean.add(get_app_dir("data"))
+
+    # 3. All potential XDG Base directories
+    if os.name != "nt":
+        if os.environ.get("XDG_CONFIG_HOME"):
+            dirs_to_clean.add(os.path.join(os.environ["XDG_CONFIG_HOME"], "termstory"))
+        dirs_to_clean.add(os.path.expanduser("~/.config/termstory"))
+        
+        if os.environ.get("XDG_DATA_HOME"):
+            dirs_to_clean.add(os.path.join(os.environ["XDG_DATA_HOME"], "termstory"))
+        dirs_to_clean.add(os.path.expanduser("~/.local/share/termstory"))
+
     for db_dir in dirs_to_clean:
         if os.path.exists(db_dir):
             try:
-                for filename in os.listdir(db_dir):
-                    file_path = os.path.join(db_dir, filename)
-                    if os.path.isfile(file_path) or os.path.islink(file_path):
-                        os.unlink(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
+                if os.path.islink(db_dir) or os.path.isfile(db_dir):
+                    os.unlink(db_dir)
+                elif os.path.isdir(db_dir):
+                    shutil.rmtree(db_dir)
             except Exception:
                 pass
                 
+    # 4. Remove global ignore file
+    ignore_file = os.path.expanduser("~/.termstoryignore")
+    if os.path.exists(ignore_file):
+        try:
+            os.unlink(ignore_file)
+        except Exception:
+            pass
+
     cleanup_shell_marker()
     console.print("\n[bold green]✨ TermStory state, configuration, and database have been successfully reset![/]")
 

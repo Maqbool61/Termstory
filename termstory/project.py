@@ -95,34 +95,13 @@ def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
 def find_project_root(path: str) -> str:
     """Find the root project directory for a given path by looking for repository/project markers, 
     stopping at home or root directories. Prioritizes VCS roots (.git, .hg, .svn) first."""
-    # Expand and make absolute
-    abs_path = os.path.abspath(os.path.expanduser(path))
-    home = os.path.abspath(os.path.expanduser("~"))
+    # Expand and make absolute, resolve symlinks
+    abs_path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    home = os.path.realpath(os.path.abspath(os.path.expanduser("~")))
     
     # If the path is home or root, just return it
     if abs_path == home or abs_path == "/":
         return abs_path
-        
-    # Explicitly skip scanning known network mount prefixes to prevent blocking on stale mounts
-    if abs_path.startswith("\\\\"):
-        return home
-        
-    network_prefixes = ("/mnt", "/Volumes/smb", "/nfs", "/smb", "/Network", "/net")
-    for prefix in network_prefixes:
-        if abs_path == prefix or abs_path.startswith(prefix + "/"):
-            return home
-
-    # Check for symlink escapes: if any part of the path is a symlink that points outside the home directory
-    current_check = abs_path
-    while current_check and current_check != "/" and current_check != home:
-        if os.path.islink(current_check):
-            real_path = os.path.realpath(current_check)
-            if not real_path.startswith(home + os.sep) and real_path != home:
-                return home
-        parent = os.path.dirname(current_check)
-        if parent == current_check:
-            break
-        current_check = parent
 
     max_depth = 50
 
@@ -167,11 +146,19 @@ def find_project_root(path: str) -> str:
         current = parent
         
     # Fallback logic if no project markers were found:
-    # Check if the path is inside a common project workspace folder (e.g., ~/Projects/...)
-    rel_to_home = os.path.relpath(abs_path, home)
-    parts = rel_to_home.split(os.sep)
-    if len(parts) >= 2 and parts[0].lower() in {"projects", "workspace", "workspace_py", "repos", "git", "code", "dev", "development"}:
-        return os.path.join(home, parts[0], parts[1])
+    # Check if the path is inside home. Implement a blacklist for explicitly irrelevant directories.
+    # Any non-blacklisted folder up to 2 directory levels deep will be allowed to register as a project.
+    if abs_path.startswith(home + os.sep):
+        rel_to_home = os.path.relpath(abs_path, home)
+        parts = rel_to_home.split(os.sep)
+        
+        blacklist = {"trash", "downloads", "desktop", "cache", "documents", "pictures", "movies", "music", "public", "applications", "library"}
+        for part in parts:
+            if part.startswith('.') or part.lower() in blacklist:
+                return home
+                
+        levels = min(2, len(parts))
+        return os.path.join(home, *parts[:levels])
         
     return home
 

@@ -748,7 +748,7 @@ def make_stacked_bar(project_seconds: Dict[str, int], total_seconds: int, width:
 
 
 class NarrativeText(Static):
-    """A Static widget that automatically reflows its text on resize, preserving ASCII hanging indents."""
+    """A Static widget that natively reflows its text on resize, avoiding jitter."""
     
     def __init__(self, raw_text: str, prefix: str = "", suffix: str = "", parse_markup: bool = False, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -756,88 +756,17 @@ class NarrativeText(Static):
         self.prefix = prefix
         self.suffix = suffix
         self.parse_markup = parse_markup
-        self._last_width = None
 
     def on_mount(self) -> None:
-        if self.size.width > 0:
-            self._update_wrapped()
-        else:
-            self._set_content(self.raw_text)
-
-    def on_resize(self, event) -> None:
-        if self._last_width != event.size.width:
-            self._last_width = event.size.width
-            self._update_wrapped()
-
-    def _set_content(self, text: str) -> None:
         from rich.text import Text
-        full_text = self.prefix + text + self.suffix
+        full_text = self.prefix + self.raw_text + self.suffix
         if self.parse_markup:
             try:
-                self.update(Text.from_markup(full_text))
+                self.update(Text.from_markup(full_text, overflow="fold"))
             except Exception:
-                self.update(Text(full_text))
+                self.update(Text(full_text, overflow="fold"))
         else:
-            self.update(Text(full_text))
-
-    def _update_wrapped(self) -> None:
-        import textwrap
-        import re
-        
-        available_width = max(40, self.size.width - 2)
-        
-        wrapped_lines = []
-        for line in self.raw_text.splitlines():
-            if not line.strip():
-                wrapped_lines.append("")
-                continue
-                
-            clean_line = line.rstrip()
-            
-            match = re.match(r'^(\s*(?:├─|└─|├──|└──|│\s+|•|\*|-)\s*)(.*)', clean_line)
-            
-            emoji_match = False
-            indent = ""
-            content = clean_line
-            if not match:
-                clean_stripped = clean_line.strip()
-                if clean_line.startswith("   ") or clean_line.startswith("  "):
-                    indent = "   "
-                    content = clean_stripped
-                    emoji_match = True
-                elif any(clean_stripped.startswith(e) for e in ["🧠", "🌌", "🩸", "🛡️", "🤖", "🔒"]):
-                    indent = ""
-                    content = clean_line
-                    emoji_match = True
-            
-            if match:
-                indent = match.group(1)
-                content = match.group(2)
-                wrapped = textwrap.wrap(content, width=max(20, available_width - len(indent)))
-                if not wrapped:
-                    wrapped_lines.append(indent)
-                else:
-                    wrapped_lines.append(indent + wrapped[0])
-                    space_indent = " " * len(indent)
-                    for w in wrapped[1:]:
-                        wrapped_lines.append(space_indent + w)
-            elif emoji_match:
-                wrapped = textwrap.wrap(content, width=max(20, available_width - len(indent)))
-                if not wrapped:
-                    wrapped_lines.append(indent)
-                else:
-                    wrapped_lines.append(indent + wrapped[0])
-                    space_indent = " " * len(indent)
-                    for w in wrapped[1:]:
-                        wrapped_lines.append(space_indent + w)
-            else:
-                wrapped = textwrap.wrap(clean_line, width=available_width)
-                if not wrapped:
-                    wrapped_lines.append("")
-                else:
-                    wrapped_lines.extend(wrapped)
-                    
-        self._set_content("\n".join(wrapped_lines))
+            self.update(Text(full_text, overflow="fold"))
 
 class DetailsCanvas(VerticalScroll):
     """Display overall metrics, dynamic time distribution bar, and Git/Command details."""
@@ -868,13 +797,13 @@ class DetailsCanvas(VerticalScroll):
         total_time_seconds = sum(s.duration_seconds for s in sessions)
         total_time_str = format_duration(total_time_seconds)
         
-        active_project_ids = {s.project_id for s in sessions if s.project_id is not None}
+        active_project_ids = {s.project_id for s in sessions}
         active_projects_count = len(active_project_ids)
         total_commits = sum(len(s.commits) for s in sessions)
         
         # Build side-by-side header block just like the daily chronicle
         operator = get_operator_handle()
-        fs = int(calculate_focus_score(sessions) * 10)
+        fs = calculate_focus_score(sessions)
         tod = calculate_time_of_day_distribution(sessions)
         peak_velocity = "morning grinds"
         if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
@@ -903,9 +832,9 @@ class DetailsCanvas(VerticalScroll):
         header_lines.append(f"[bold cyan]{avatar_lines[3]}[/]     [bold cyan]TIMEFRAME:[/]       [bold]{title}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]STATUS:[/]          [dim]{status_part}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]FOCUS TIME:[/]      [bold]{total_time_str}[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]ACTIVE DAYS:[/]     [bold]{active_days_count} days[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs}/100[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK TIME:[/]       [dim]{peak_velocity}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]ACTIVE REPOS:[/]      [bold]{active_projects_count} Workspaces[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs:.1f}/10.0[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK VELOCITY:[/]    [dim]{peak_velocity}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[9]}[/]     [bold cyan]PROJECTS:[/]        [dim]{active_projects_count}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[10]}[/]     [bold cyan]COMMITS:[/]         [dim]{total_commits}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[11]}[/]     [bold cyan]SYSTEM ENGINE:[/]   [dim]Online & Synchronized[/]")
@@ -1060,14 +989,37 @@ class DetailsCanvas(VerticalScroll):
         """STATE W: TermStory Wrapped Monthly Overview"""
         self.remove_children()
         
+        if len(sessions) == 0:
+            self.mount(Static(Text.from_markup(
+                "\n\n  [bold cyan]Welcome to TermStory![/bold cyan]\n\n"
+                "  We couldn't find any shell history yet. Try running some terminal commands, or check your macOS Privacy permissions."
+            )))
+            return
+            
+        self.mount(Static(Text("⏳ Compiling telemetry... please wait", style="italic yellow")))
+        self._calculate_wrapped_telemetry(season_name, timeframe_id, sessions, projects)
+
+    @work(thread=True)
+    def _calculate_wrapped_telemetry(self, season_name: str, timeframe_id: str, sessions: List[Session], projects: List[Project]) -> None:
         telemetry = self.app.get_month_wrapped_telemetry(timeframe_id)
-        
+        self.app.call_from_thread(self._render_wrapped_view_ui, season_name, timeframe_id, sessions, projects, telemetry)
+
+    def _render_wrapped_view_ui(
+        self,
+        season_name: str,
+        timeframe_id: str,
+        sessions: List[Session],
+        projects: List[Project],
+        telemetry: dict
+    ) -> None:
+        self.remove_children()
         operator = telemetry["github_username"]
         archetype = telemetry["archetype"]
         focus_hours = telemetry["focus_hours"]
         active_days = telemetry["active_days"]
         
         project_seconds = telemetry["project_seconds"]
+        active_projects_count = len(project_seconds)
         top_projects = sorted(project_seconds.keys(), key=lambda x: project_seconds[x], reverse=True)
         volume_summary = ", ".join(top_projects[:2]) if top_projects else "Other"
         if len(volume_summary) > 30:
@@ -1085,7 +1037,7 @@ class DetailsCanvas(VerticalScroll):
             on_resolved=lambda: self.app.call_from_thread(self.app.refresh_details_canvas)
         )
         
-        fs = int(calculate_focus_score(sessions) * 10)
+        fs = calculate_focus_score(sessions)
         tod = calculate_time_of_day_distribution(sessions)
         peak_velocity = "morning grinds"
         if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
@@ -1094,17 +1046,18 @@ class DetailsCanvas(VerticalScroll):
             peak_velocity = "late night grinds"
             
         total_commits = sum(len(s.commits) for s in sessions)
+        total_time_str = format_duration(sum(s.duration_seconds for s in sessions))
         
         header_lines = []
         header_lines.append(f"[bold cyan]{avatar_lines[0]}[/]     [bold cyan]⚡ TermStory Wrapped // SEASON: {season_name.upper()} ⚡[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[1]}[/]     [bold cyan]====================================================[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[2]}[/]     [bold cyan]OPERATOR:[/]        [bold cyan]@{operator.lstrip('@')}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[3]}[/]     [bold cyan]ARCHETYPE:[/]       [bold green]{archetype}[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]VOLUME:[/]          [dim]Vol. {len(sessions)} ({volume_summary})[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]VELOCITY:[/]        [bold]{int(focus_hours)} Focus Hours Across {active_days} Master Chapters[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]STATUS:[/]          [dim]{status_part}[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs}/100[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK TIME:[/]       [dim]{peak_velocity}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]TIME DEPLOYED:[/]    [dim]{total_time_str}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]VELOCITY:[/]        [bold]{focus_hours:.1f} Focus Hours Across {active_days} Master Chapters[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]ACTIVE REPOS:[/]      [bold]{active_projects_count} Workspaces[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs:.1f}/10.0[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK VELOCITY:[/]    [dim]{peak_velocity}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[9]}[/]     [bold cyan]COMMITS:[/]         [dim]{total_commits}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[10]}[/]     [bold cyan]ACTIVE DAYS:[/]     [dim]{active_days} Days[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[11]}[/]     [bold cyan]SYSTEM ENGINE:[/]   [dim]Online & Synchronized[/]")
@@ -1131,6 +1084,8 @@ class DetailsCanvas(VerticalScroll):
         net_change = additions - deletions
         if net_change < 0:
             net_growth_str = f"📉 {net_change:,} Lines (The codebase lost weight)"
+        elif net_change == 0:
+            net_growth_str = f"➖ 0 Lines (No net change)"
         else:
             net_growth_str = f"📈 +{net_change:,} Lines (The codebase grew)"
             
@@ -1139,11 +1094,12 @@ class DetailsCanvas(VerticalScroll):
             branches_merged_str = f"{len(merged_branches)} Productive Features Coalesced"
             longest_branch = merged_branches[0]
             shortest_branch = merged_branches[-1]
+            longest_t = Text(f"├── 🕸️  Longest Lifespan: `{longest_branch}` (12 Days)")
+            shortest_t = Text(f"└── 💥 Shortest Sprint:  `{shortest_branch}` (4 Hours)")
         else:
-            branches_merged_str = f"{len(sessions) // 3 or 3} Productive Features Coalesced"
-            top_proj = top_projects[0] if top_projects else "Other"
-            longest_branch = f"feature/{top_proj.lower().replace(' ', '-')}-core"
-            shortest_branch = f"bugfix/{top_proj.lower().replace(' ', '-')}-patch"
+            branches_merged_str = f"0 Productive Features Coalesced"
+            longest_t = Text(f"├── 🕸️  Longest Lifespan: N/A")
+            shortest_t = Text(f"└── 💥 Shortest Sprint:  N/A")
             
         matrix_text = Text()
         matrix_text.append("Lines Inserted:  ")
@@ -1158,11 +1114,8 @@ class DetailsCanvas(VerticalScroll):
         matrix_text.append("🚀 DELIVERED NARRATIVE ARCS:\n")
         matrix_text.append(f"├── 🛠️  Branches Merged:  {branches_merged_str}\n")
         
-        longest_t = Text(f"├── 🕸️  Longest Lifespan: `{longest_branch}` (12 Days)")
         matrix_text.append(longest_t)
         matrix_text.append("\n")
-        
-        shortest_t = Text(f"└── 💥 Shortest Sprint:  `{shortest_branch}` (4 Hours)")
         matrix_text.append(shortest_t)
         
         matrix_container = Text()
@@ -1263,7 +1216,7 @@ class DetailsCanvas(VerticalScroll):
         day_dt = datetime.strptime(date_str, "%Y-%m-%d")
         formatted_date = day_dt.strftime("%A, %B %d, %Y")
         
-        fs = int(calculate_focus_score(sessions) * 10)
+        fs = calculate_focus_score(sessions)
         tod = calculate_time_of_day_distribution(sessions)
         peak_velocity = "morning grinds"
         if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
@@ -1298,7 +1251,7 @@ class DetailsCanvas(VerticalScroll):
         header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]STATUS:[/]          [dim]{status_part}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]FOCUS TIME:[/]      [bold]{focus_str}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]ACTIVE SESSIONS:[/] [bold]{len(sessions)}[/]")
-        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs}/100[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs:.1f}/10.0[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK TIME:[/]       [dim]{peak_velocity}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[9]}[/]     [bold cyan]PROJECTS:[/]        [dim]{len(projects)}[/]")
         header_lines.append(f"[bold cyan]{avatar_lines[10]}[/]     [bold cyan]COMMITS:[/]         [dim]{sum(len(s.commits) for s in sessions)}[/]")
@@ -2200,6 +2153,11 @@ class TermStoryWorkspace(App):
             until_ts = int(end_dt.timestamp())
             
             matched_sessions = [s for s in self.sessions if s.date_str.startswith(timeframe_id)]
+            
+            # Legacy Month override logic
+            if matched_sessions and all(getattr(s, "is_legacy", False) for s in matched_sessions):
+                since_ts = 0
+                
             focus_hours = round(sum(s.duration_seconds for s in matched_sessions) / 3600.0, 1)
             
         total_time_seconds = sum(s.duration_seconds for s in matched_sessions)
@@ -2209,6 +2167,9 @@ class TermStoryWorkspace(App):
         active_project_ids = {s.project_id for s in matched_sessions if s.project_id is not None}
         active_projects = [p for p in self.projects if p.id in active_project_ids]
         
+        if not active_projects:
+            active_projects = self.projects
+            
         git_stats = get_timeframe_git_stats([p.path for p in active_projects], since_ts, until_ts)
         
         additions = git_stats["additions"]
@@ -2233,12 +2194,62 @@ class TermStoryWorkspace(App):
         branch_names_list = ", ".join(merged_branches[:5]) if merged_branches else "main, feature/tui, bugfix/exit-code"
         cleaned_commits_block = "\n".join(f"- {m}" for m in commit_messages[:10]) if commit_messages else "No commits logged."
         
-        from termstory.formatter import extract_files_from_commands
-        all_commands = []
+        from collections import Counter
+        import os
+        import shlex
+        
+        file_counts = Counter()
+        amends_count = 0
+        late_night_cmds = 0
+        failed_builds = 0
+        passed_builds = 0
+        redacted_secrets_count = 0
+        found_tools = set()
+        total_commands = 0
+        
+        tool_keywords = ['rustc', 'cargo', 'go', 'python3', 'python', 'pip', 'npm', 'yarn', 'node', 'docker', 'docker-compose', 'kubectl', 'pytest', 'git', 'clang', 'gcc', 'make', 'cmake', 'mvn', 'gradle', 'java', 'sqlite3', 'psql']
+        editor_executables = {"vim", "vi", "nano", "emacs", "code"}
+        
         for s in matched_sessions:
-            all_commands.extend(s.commands)
-            
-        file_counts = extract_files_from_commands(all_commands)
+            for cmd in s.commands:
+                total_commands += 1
+                cmd_str = cmd.command
+                
+                if "commit --amend" in cmd_str:
+                    amends_count += 1
+                    
+                dt = datetime.fromtimestamp(cmd.timestamp)
+                if dt.hour >= 23 or dt.hour < 5:
+                    late_night_cmds += 1
+                    
+                if cmd.exit_code is not None and cmd.exit_code != 0:
+                    failed_builds += 1
+                else:
+                    passed_builds += 1
+                    
+                if "[REDACTED]" in cmd_str:
+                    redacted_secrets_count += 1
+                    
+                tokens = cmd_str.split()
+                if not tokens:
+                    continue
+                    
+                first = tokens[0].lower()
+                base = os.path.basename(first)
+                if base in tool_keywords:
+                    found_tools.add(base)
+                    
+                if base in editor_executables:
+                    try:
+                        shlex_tokens = shlex.split(cmd_str)
+                    except Exception:
+                        shlex_tokens = tokens
+                    files = [t for t in shlex_tokens[1:] if not t.startswith('-')]
+                    for f in files:
+                        fname = os.path.basename(f)
+                        if fname:
+                            file_counts[fname] += 1
+                            
         top_buffers = []
         
         from termstory.formatter import disambiguate_project_names
@@ -2286,30 +2297,10 @@ class TermStoryWorkspace(App):
                 top_buffers.append(formatted_buf)
         top_editor_buffers_with_durations = "\n".join(top_buffers)
         
-        amends_count = sum(1 for cmd in all_commands if "commit --amend" in cmd.command)
-        
-        late_night_cmds = 0
-        for cmd in all_commands:
-            dt = datetime.fromtimestamp(cmd.timestamp)
-            if dt.hour >= 23 or dt.hour < 5:
-                late_night_cmds += 1
-        midnight_percentage = round((late_night_cmds / len(all_commands) * 100), 1) if all_commands else 0.0
-        
-        failed_builds = sum(1 for cmd in all_commands if cmd.exit_code is not None and cmd.exit_code != 0)
-        passed_builds = len(all_commands) - failed_builds
-        success_rate = round((passed_builds / len(all_commands) * 100), 1) if all_commands else 100.0
-        
-        tool_keywords = ['rustc', 'cargo', 'go', 'python3', 'python', 'pip', 'npm', 'yarn', 'node', 'docker', 'docker-compose', 'kubectl', 'pytest', 'git', 'clang', 'gcc', 'make', 'cmake', 'mvn', 'gradle', 'java', 'sqlite3', 'psql']
-        found_tools = set()
-        for cmd in all_commands:
-            first = cmd.command.split()[0].lower() if cmd.command.split() else ""
-            import os
-            base = os.path.basename(first)
-            if base in tool_keywords:
-                found_tools.add(base)
+        midnight_percentage = round((late_night_cmds / total_commands * 100), 1) if total_commands else 0.0
+        success_rate = round((passed_builds / total_commands * 100), 1) if total_commands else 100.0
         tool_keywords_list = " ".join(f"[{t}]" for t in sorted(found_tools)) if found_tools else "[git] [python3] [pytest]"
-        
-        redacted_secrets_count = sum(1 for cmd in all_commands if "[REDACTED]" in cmd.command)
+
         
         net_change = additions - deletions
         if additions + deletions > 0 and deletions > additions * 1.2:
@@ -2327,7 +2318,7 @@ class TermStoryWorkspace(App):
             "github_username": get_operator_handle(),
             "focus_hours": focus_hours,
             "total_sessions": len(matched_sessions),
-            "total_commands": len(all_commands),
+            "total_commands": total_commands,
             "additions": additions,
             "deletions": deletions,
             "merged_prs": merged_prs,
@@ -2352,7 +2343,7 @@ class TermStoryWorkspace(App):
         }
 
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def bulk_generate_sessions_stories(self, timeframe_id: str, timeframe_type: str, sessions_to_summarize: List[Session]) -> None:
         import time
         provider = self.config.get("active_provider", "disabled")
@@ -2374,6 +2365,11 @@ class TermStoryWorkspace(App):
         success_count = 0
         aborted = False
         for idx, session in enumerate(sessions_to_summarize):
+            from textual.worker import get_current_worker
+            if get_current_worker().is_cancelled:
+                aborted = True
+                break
+                
             if self.config.get("active_provider", "disabled") == "disabled":
                 aborted = True
                 break
@@ -2479,6 +2475,10 @@ class TermStoryWorkspace(App):
             if len(parts) >= 2:
                 timeframe_type = parts[-1]
                 timeframe_id = "-".join(parts[:-1])
+                
+                if timeframe_id in self.bulk_running_timeframes:
+                    return
+                    
                 missing_sessions = []
                 if timeframe_type == "month":
                     missing_sessions = [
