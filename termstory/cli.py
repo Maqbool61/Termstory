@@ -517,8 +517,8 @@ def config_list():
 
     flat_config = flatten_dict(config)
     
-    from rich.box import ROUNDED
-    table = Table(title="🔧 TermStory Configuration", box=ROUNDED, border_style="cyan")
+    from rich.box import SIMPLE
+    table = Table(title="🔧 TermStory Configuration", box=SIMPLE, border_style="cyan")
     table.add_column("Key", style="cyan bold")
     table.add_column("Value", style="green")
     

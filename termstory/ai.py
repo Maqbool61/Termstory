@@ -16,6 +16,13 @@ _circuit_breaker_open_until = 0.0
 MAX_FAILURES = 3
 COOLDOWN_SECONDS = 60.0
 
+def reset_circuit_breaker() -> None:
+    """Reset the global circuit breaker state. Primarily used for testing."""
+    global _circuit_breaker_failures, _circuit_breaker_open_until
+    with _circuit_breaker_lock:
+        _circuit_breaker_failures = 0
+        _circuit_breaker_open_until = 0.0
+
 def get_last_ai_error() -> Optional[str]:
     """Retrieve the last AI call error message, if any, for the current thread."""
     return getattr(_local_ai_state, "last_error", None)

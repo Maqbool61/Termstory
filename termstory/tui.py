@@ -886,6 +886,7 @@ class DetailsCanvas(VerticalScroll):
                     exec_widgets.append(Static(f"{cached_exec}\n"))
                     try:
                         btn_regen = Button("⟳ Regenerate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn_regen.tooltip = "Re-run the AI summarizer for this period."
                         btn_regen.classes = "exec-btn"
                         exec_widgets.append(btn_regen)
                     except Exception:
@@ -894,6 +895,7 @@ class DetailsCanvas(VerticalScroll):
                     exec_widgets.append(Static("[dim]Ask AI to write a high-level summary of your work for this period:[/dim]"))
                     try:
                         btn = Button("✨ Generate Timeframe Summary", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn.tooltip = "Ask AI to write a high-level summary of your work."
                         btn.classes = "exec-btn"
                         exec_widgets.append(btn)
                     except Exception:
@@ -999,7 +1001,7 @@ class DetailsCanvas(VerticalScroll):
         self.mount(Static(Text("⏳ Compiling telemetry... please wait", style="italic yellow")))
         self._calculate_wrapped_telemetry(season_name, timeframe_id, sessions, projects)
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def _calculate_wrapped_telemetry(self, season_name: str, timeframe_id: str, sessions: List[Session], projects: List[Project]) -> None:
         telemetry = self.app.get_month_wrapped_telemetry(timeframe_id)
         self.app.call_from_thread(self._render_wrapped_view_ui, season_name, timeframe_id, sessions, projects, telemetry)
@@ -1186,6 +1188,7 @@ class DetailsCanvas(VerticalScroll):
                         
                     try:
                         btn_regen = Button("⟳ Regenerate Wrapped Audit", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn_regen.tooltip = "Regenerate the behavioral audit and roast."
                         btn_regen.classes = "exec-btn"
                         exec_widgets.append(btn_regen)
                     except Exception:
@@ -1195,6 +1198,7 @@ class DetailsCanvas(VerticalScroll):
                     
                     try:
                         btn = Button("✨ Generate Wrapped Audit", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
+                        btn.tooltip = "Ask AI to generate a behavioral audit and perceptive roast."
                         btn.classes = "exec-btn"
                         exec_widgets.append(btn)
                     except Exception:
@@ -1286,12 +1290,14 @@ class DetailsCanvas(VerticalScroll):
                     
                     # Add a Regenerate button for the chronicle
                     btn_regen = Button("⟳ Regenerate Chronicle", id=f"btn-exec-{date_str}-date")
+                    btn_regen.tooltip = "Regenerate the AI Daily Chronicle for this day."
                     btn_regen.classes = "exec-btn"
                     narrative_widgets.append(btn_regen)
                 else:
                     # Add a button to generate the chronicle
                     narrative_widgets.append(Static("[dim]Ask AI to compile the chronological Story of You for this day:[/dim]"))
                     btn_gen = Button("✨ Generate Daily Chronicle", id=f"btn-exec-{date_str}-date")
+                    btn_gen.tooltip = "Ask AI to compile the chronological Story of You."
                     btn_gen.classes = "exec-btn"
                     narrative_widgets.append(btn_gen)
                 
@@ -1972,7 +1978,7 @@ class TermStoryWorkspace(App):
         finally:
             self._refreshing_canvas = False
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def generate_single_session_story(self, session: Session) -> None:
         """Generate AI summary for a single session in a background thread."""
         provider = self.config.get("active_provider", "disabled")
@@ -2041,7 +2047,7 @@ class TermStoryWorkspace(App):
         tree.populate(self.projects, self.sessions, search_query=query, is_deep_search=getattr(self, "is_deep_search_active", False))
         self.refresh_details_canvas()
 
-    @work(thread=True)
+    @work(thread=True, exclusive=True)
     def generate_timeframe_executive_review(self, timeframe_id: str, timeframe_type: str, stats_summary: str) -> None:
         provider = self.config.get("active_provider", "disabled")
         if provider == "disabled":

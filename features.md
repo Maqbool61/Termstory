@@ -44,3 +44,7 @@ An AI feature that analyzes the chaotic, unhinged nature of your late-night, caf
 ### 9. The "Rage-Quit" Signature 🛑
 *What it tracks:* The specific command that most frequently serves as your *final* command before a long period of inactivity. 
 *Why it's fun:* It answers the question: "How do you end your day?" Is your signature sign-off a triumphant `git push origin main`, or is it a frustrated `killall node` followed by 14 hours of total terminal silence?
+
+---
+
+

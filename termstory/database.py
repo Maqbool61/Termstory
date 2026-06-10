@@ -782,6 +782,7 @@ class Database:
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE;")
             cursor.execute("""
                 UPDATE sessions SET ai_summary = ? WHERE id = ?
             """, (ai_summary, session_id))
@@ -810,10 +811,9 @@ class Database:
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
-            # Delete first to ensure SQLite version compatibility without UPSERT (ON CONFLICT)
-            cursor.execute("DELETE FROM macro_summaries WHERE timeframe_id = ?", (timeframe_id,))
+            cursor.execute("BEGIN IMMEDIATE;")
             cursor.execute("""
-                INSERT INTO macro_summaries (timeframe_id, type, summary)
+                INSERT OR REPLACE INTO macro_summaries (timeframe_id, type, summary)
                 VALUES (?, ?, ?)
             """, (timeframe_id, type_str, summary))
             conn.commit()
