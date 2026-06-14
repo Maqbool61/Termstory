@@ -261,6 +261,20 @@ def show_insights():
     console.print("\n".join(output_lines))
 
 
+@app.command("web")
+def show_web():
+    """Generate and open a beautiful HTML report of your work statistics"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    from termstory.web import generate_and_open_report
+    generate_and_open_report(db)
+
+
+
 @app.command("ask")
 def ask_cmd(
     query: str = typer.Argument(..., help="Question to ask about your development history")
