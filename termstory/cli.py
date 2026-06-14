@@ -234,6 +234,40 @@ def show_insights(
     from rich.text import Text
     console.print(Text.from_ansi(output))
 
+@app.command("ask")
+def ask_cmd(
+    query: str = typer.Argument(..., help="Question to ask about your development history")
+):
+    """Ask natural language questions about your shell history and activity"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    from termstory.ask import search_ask, generate_answer
+    from termstory.config import load_config
+    
+    sessions = search_ask(query, db)
+    if not sessions:
+        console.print("[yellow]No relevant history found for your query.[/yellow]")
+        raise typer.Exit()
+        
+    config = load_config()
+    with console.status("[bold green]Analyzing history and generating answer...[/bold green]"):
+        answer = generate_answer(query, sessions, config)
+        
+    if not answer:
+        from termstory.ai import get_last_ai_error
+        err = get_last_ai_error()
+        if err:
+            console.print(f"[bold red]AI Error: {err}[/bold red]")
+        else:
+            console.print("[bold red]Failed to generate an answer.[/bold red]")
+        raise typer.Exit(code=1)
+        
+    console.print(answer)
+
 def cleanup_shell_marker():
     """Remove TermStory injection block and old injections from shell rc files"""
     rc_files = ["~/.zshrc", "~/.bashrc", "~/.bash_profile"]

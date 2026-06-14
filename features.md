@@ -55,6 +55,7 @@ One-shot subcommand that launches `agy -p` from within TermStory, bridging your 
 ## 🔧 Shipped in v0.4.0
 
 - ✅ **`termstory agy` subcommand**: Bridges TermStory to `agy -p` for instant AI pair-programming.
+- ✅ **`termstory ask` subcommand**: Search and Q&A over history with TF-IDF and LLMs.
 - ✅ **`termstory optimize` (VACUUM)**: Reclaims SQLite disk space via `VACUUM`.
 - ✅ **`termstory --version` flag**: Reports current version from `__version__`.
 - ✅ **TUI status bar version + last ingestion**: StatsHeader now shows `v0.4.0` and `Synced: <date>`.
