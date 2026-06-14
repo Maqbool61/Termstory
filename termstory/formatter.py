@@ -1322,4 +1322,111 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
     return get_fallback_avatar_padded(width, height)
 
 
+def format_stats_output(db) -> str:
+    """Format the deep history stats report as a beautiful, high-density dashboard."""
+    from termstory.stats import daily_activity_heatmap, project_breakdown, language_detection, peak_hours
+    
+    # 1. Heatmap
+    heatmap_str = daily_activity_heatmap(db, days_limit=30, colored=True)
+    
+    # 2. Project Breakdown
+    breakdown = project_breakdown(db)
+    
+    # Sort projects by duration DESC
+    sorted_projects = sorted(breakdown.items(), key=lambda x: x[1]["total_duration"], reverse=True)
+    
+    table = Table(box=None, show_header=True, padding=(0, 2))
+    table.add_column("Project", style="cyan", header_style="bold cyan")
+    table.add_column("Commands", justify="right", style="green")
+    table.add_column("Duration", justify="right", style="green")
+    table.add_column("Sessions", justify="right", style="green")
+    table.add_column("First Active", style="dim")
+    table.add_column("Last Active", style="dim")
+    
+    def format_ts(ts):
+        if ts is None:
+            return "N/A"
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+        
+    for name, stats in sorted_projects:
+        table.add_row(
+            name,
+            str(stats["commands_count"]),
+            format_duration(stats["total_duration"]),
+            str(stats["sessions_count"]),
+            format_ts(stats["first_seen"]),
+            format_ts(stats["last_seen"]),
+        )
+        
+    # 3. Language Breakdown
+    langs = language_detection(db)
+    lang_lines = []
+    for lang, pct in langs.items():
+        bar = make_visual_bar(int(pct), 100, width=15)
+        lang_lines.append(f"  • {lang:<20} {pct:>5}%  {bar}")
+    lang_output = "\n".join(lang_lines) if lang_lines else "  No languages detected."
+    
+    # 4. Peak Hours
+    hourly = peak_hours(db)
+    max_count = max(hourly.values()) if hourly.values() else 0
+    blocks = []
+    for h in range(24):
+        count = hourly[h]
+        if count == 0:
+            blocks.append("░")
+        elif max_count > 0 and count / max_count < 0.33:
+            blocks.append("▄")
+        elif max_count > 0 and count / max_count < 0.66:
+            blocks.append("■")
+        else:
+            blocks.append("█")
+            
+    seg1 = "".join(blocks[0:6])
+    seg2 = "".join(blocks[6:12])
+    seg3 = "".join(blocks[12:18])
+    seg4 = "".join(blocks[18:24])
+    punch_card = f"00:00 {seg1} 06:00 {seg2} 12:00 {seg3} 18:00 {seg4} 23:59"
+    
+    top_hours = sorted(hourly.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_hours_parts = []
+    for h, count in top_hours:
+        if count > 0:
+            am_pm = "AM" if h < 12 else "PM"
+            display_h = h % 12
+            if display_h == 0:
+                display_h = 12
+            top_hours_parts.append(f"{display_h} {am_pm} ({count} cmds)")
+    top_hours_str = ", ".join(top_hours_parts) if top_hours_parts else "N/A"
+    
+    # Build complete report
+    output_lines = [
+        "📊 [bold]Deep History Statistics & Telemetry[/]",
+        "",
+        "[bold cyan]Activity Heatmap (Last 30 Days)[/]",
+        "[dim]──────────────────────────────[/]",
+        f"  {heatmap_str}",
+        "",
+        "[bold cyan]Peak Hours (Command Distribution)[/]",
+        "[dim]────────────────────────────────[/]",
+        f"  {punch_card}",
+        f"  Top Active Hours: {top_hours_str}",
+        "",
+        "[bold cyan]Language Distribution[/]",
+        "[dim]─────────────────────[/]",
+        lang_output,
+        "",
+        "[bold cyan]Project Breakdown[/]",
+        "[dim]─────────────────[/]",
+    ]
+    
+    project_table_str = render_to_string(table)
+    # Indent project table rows for cleaner layout
+    indented_table = "\n".join("  " + line for line in project_table_str.split("\n"))
+    
+    output_lines.append(indented_table)
+    
+    return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
+
+
+
 

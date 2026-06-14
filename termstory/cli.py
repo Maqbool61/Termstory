@@ -9,7 +9,7 @@ from termstory.session import create_sessions
 from termstory.project import detect_projects
 from termstory.database import Database
 from termstory.date_utils import get_current_time, get_today_range
-from termstory.formatter import format_search_results, format_today_output, format_project_output, format_insights_output
+from termstory.formatter import format_search_results, format_today_output, format_project_output, format_insights_output, format_stats_output
 import sqlite3
 
 from rich.console import Console
@@ -259,6 +259,21 @@ def show_insights():
         output_lines.append("No project data available.")
         
     console.print("\n".join(output_lines))
+
+
+@app.command("stats")
+def show_stats():
+    """Show detailed, high-density work statistics and telemetry"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    output = format_stats_output(db)
+    from rich.text import Text
+    console.print(Text.from_ansi(output))
+
 
 
 @app.command("web")

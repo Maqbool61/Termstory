@@ -544,4 +544,31 @@ def test_cli_insights_command(tmp_path, monkeypatch):
     assert "Apache HugeGraph" in result.stdout
 
 
+def test_cli_stats_command(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_stats.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.cli.get_history_files", lambda: [])
+    
+    db = Database(str(db_file))
+    db.init_db()
+    
+    from termstory.date_utils import get_current_time
+    now = int(get_current_time().timestamp())
+    p = Project(id=1, name="HugeGraph", path="~/projects/incubator-hugegraph", first_seen=now, last_seen=now, session_count=1, total_time=100)
+    cmd = Command(timestamp=now, command="docker run nginx", session_id=1, project_id=1)
+    s = Session(id=1, start_time=now, end_time=now + 100, duration_seconds=100, project_id=1, commands=[cmd])
+    db.save_data([p], [s], [cmd])
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["stats"])
+    assert result.exit_code == 0
+    assert "Deep History Statistics & Telemetry" in result.stdout
+    assert "Activity Heatmap" in result.stdout
+    assert "Peak Hours" in result.stdout
+    assert "Project Breakdown" in result.stdout
+    assert "HugeGraph" in result.stdout
+
+
+
 
