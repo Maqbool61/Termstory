@@ -268,6 +268,41 @@ def ask_cmd(
         
     console.print(answer)
 
+
+@app.command("predict")
+def predict_cmd(
+    top: int = typer.Option(3, "--top", help="Number of top project predictions to show"),
+    json_out: bool = typer.Option(False, "--json", help="Output predictions as JSON"),
+):
+    """Predict what you will likely work on next (Pre-Cognitive Workspace)"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+
+    run_ingestion(db)
+
+    from termstory.predict import Predictor, format_predict_output
+
+    predictor = Predictor(db_path)
+    result = predictor.predict(top_n=top)
+
+    if json_out:
+        import json
+        from datetime import datetime
+
+        def _serialise(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            raise TypeError(f"Not serialisable: {type(obj)}")
+
+        console.print(json.dumps(result, default=_serialise, indent=2))
+        return
+
+    output = format_predict_output(result)
+    from rich.text import Text
+    console.print(Text.from_ansi(output))
+
+
 def cleanup_shell_marker():
     """Remove TermStory injection block and old injections from shell rc files"""
     rc_files = ["~/.zshrc", "~/.bashrc", "~/.bash_profile"]
@@ -490,6 +525,23 @@ def run_agy():
         raise typer.Exit(code=e.returncode)
     except KeyboardInterrupt:
         raise typer.Exit(code=130)
+
+
+@app.command("replay")
+def replay_cmd(
+    session_id: Optional[int] = typer.Argument(None, help="ID of the session to replay. If not provided, the most recent session is used."),
+    speed: float = typer.Option(1.0, "--speed", "-s", help="Playback speed multiplier (e.g. 2.0 for fast, 0.5 for slow)"),
+    list_sessions: bool = typer.Option(False, "--list", "-l", help="List recent sessions to choose from")
+):
+    """Replay a selected terminal session in fast or slow motion"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    from termstory.replay import run_replay
+    run_replay(db, session_id=session_id, speed=speed, list_sessions=list_sessions)
 
 
 # ==========================================
