@@ -734,17 +734,6 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
         query_title = query.capitalize()
         return f"[bold cyan]{query_title}[/]\n\n[dim]No matches found[/]"
 
-    total_matched_time = sum(r["duration_seconds"] for r in results)
-
-    # Calculate date range
-    timestamps = [r["start_time"] for r in results]
-    min_dt = datetime.fromtimestamp(min(timestamps))
-    max_dt = datetime.fromtimestamp(max(timestamps))
-    if min_dt.year == max_dt.year:
-        date_range_str = f"{min_dt.strftime('%b %d')} → {max_dt.strftime('%b %d')}"
-    else:
-        date_range_str = f"{min_dt.strftime('%b %d, %Y')} → {max_dt.strftime('%b %d, %Y')}"
-
     header_str = f"🔍 Search: [bold cyan]{query}[/]"
 
     if not detailed:
@@ -1032,24 +1021,24 @@ def boxify_terminal_wrapped(text: str) -> str:
     cleaned_lines = []
     
     for line in raw_lines:
-        l = line.strip()
+        stripped = line.strip()
         # Remove markdown stars
-        l = l.replace("*", "")
+        stripped = stripped.replace("*", "")
         # Strip vertical borders
-        if l.startswith("│"):
-            l = l[1:]
-        if l.endswith("│"):
-            l = l[:-1]
-        l = l.strip()
+        if stripped.startswith("│"):
+            stripped = stripped[1:]
+        if stripped.endswith("│"):
+            stripped = stripped[:-1]
+        stripped = stripped.strip()
         # Ignore horizontal line boundary characters
-        if any(c in l for c in ["┌", "└", "├", "─", "━", "═"]):
+        if any(c in stripped for c in ["┌", "└", "├", "─", "━", "═"]):
             continue
         # Clean up trailing / leading pipes
-        if l.startswith("|"):
-            l = l[1:]
-        if l.endswith("|"):
-            l = l[:-1]
-        cleaned_lines.append(l.strip())
+        if stripped.startswith("|"):
+            stripped = stripped[1:]
+        if stripped.endswith("|"):
+            stripped = stripped[:-1]
+        cleaned_lines.append(stripped.strip())
         
     # Remove leading/trailing empty lines
     while cleaned_lines and not cleaned_lines[0]:

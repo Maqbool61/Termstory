@@ -384,7 +384,7 @@ def show_ui(
                     sys.exit(0)
                 else:
                     console.print(
-                        f"\n[yellow]⚡ Shell configuration already has timestamps enabled! Proceeding to TUI...[/yellow]\n"
+                        "\n[yellow]⚡ Shell configuration already has timestamps enabled! Proceeding to TUI...[/yellow]\n"
                     )
             except Exception as e:
                 console.print(f"[bold red]Error modifying {config_display}: {e}[/bold red]")
