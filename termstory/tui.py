@@ -127,12 +127,19 @@ def calculate_dashboard_stats(sessions: List[Session], projects: List[Project], 
     total_time_str = format_duration(total_seconds)
     heatmap = generate_heatmap(real_sessions, days_limit=days_limit)
     
+    # Derive last ingestion time from the most recently ended session
+    last_ingestion_str = ""
+    if sessions:
+        latest_ts = max(s.end_time for s in sessions)
+        last_ingestion_str = datetime.fromtimestamp(latest_ts).strftime("%b %d %H:%M")
+
     return {
         "total_time": total_time_str,
         "active_days": len(active_dates),
         "streak": streak,
         "projects_count": len(projects),
-        "heatmap": heatmap
+        "heatmap": heatmap,
+        "last_ingestion": last_ingestion_str,
     }
 
 
@@ -552,14 +559,18 @@ class StatsHeader(Static):
     """The cumulative stats header spanning the top of the interface."""
     
     def update_stats(self, stats: Dict[str, Any], ai_status: str = "", days_limit: Optional[int] = 30) -> None:
+        from termstory import __version__
         limit_str = f"Last {days_limit} Days" if days_limit is not None else "All History"
+        ingestion_str = ""
+        if stats.get("last_ingestion"):
+            ingestion_str = f"  │  [dim]Synced: {stats['last_ingestion']}[/dim]"
         self.update(
-            f"[bold cyan]TermStory Dashboard[/bold cyan]  │  "
+            f"[bold cyan]TermStory[/bold cyan] [dim]v{__version__}[/dim]  │  "
             f"[bold]Time logged:[/bold] {stats['total_time']}  │  "
             f"[bold]Active Days:[/bold] {stats['active_days']}  │  "
             f"[bold green]Streak:[/bold green] {stats['streak']} Days  │  "
             f"[bold]Projects:[/bold] {stats['projects_count']}  │  "
-            f"{ai_status}\n"
+            f"{ai_status}{ingestion_str}\n"
             f"[dim]Activity ({limit_str}):[/dim] {stats['heatmap']}"
         )
 

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="termstory",
-    version="0.2.12",
+    version="0.4.0",
     author="TermStory Contributors",
     description="Local shell history parsing, session grouping, and visual daily chronicle terminal dashboard",
     long_description=open("README.md", encoding="utf-8").read(),

@@ -29,6 +29,9 @@ MANIFEST
 # SQLite databases
 *.db
 *.sqlite
+*.db-shm
+*.db-wal
+*.bak
 
 # Environments
 .env

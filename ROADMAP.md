@@ -1,6 +1,27 @@
 # TermStory Future Roadmap & Vision
 
-This document tracks the long-term, futuristic concepts and deep R&D vision for TermStory. While immediate technical milestones are tracked in `agents.md` and standard project boards, this file is dedicated to transformational ideas that align with our "Developer Memory Engine" philosophy.
+This document tracks long-term, transformational concepts for TermStory aligned with our "Developer Memory Engine" philosophy. Immediate technical milestones live in `agents.md`.
+
+---
+
+## v0.4.x — In Progress
+
+- **SQLite FTS5 Integration**: Full-Text Search across sessions, commands, and AI summaries for ranked, sub-millisecond matching.
+- **Concurrency Stress Tests & Massive History Simulations**: Multi-year synthetic history logs to harden ingestion race-condition coverage.
+- **Project-Specific AI Contexts**: Seed LLM prompts with per-project context descriptors for richer, more accurate narratives.
+- **`agy` Subcommand**: One-shot `termstory agy` to launch `agy -p` for quick AI pair-programming sessions bridged from shell history.
+
+---
+
+## v0.5.x — Planned
+
+- **GitHub Actions CI Pipeline**: Automated `pytest` + lint gate on every PR via `.github/workflows/ci.yml`.
+- **PyPI automated release workflow**: Tag-triggered build and publish pipeline.
+- **`termstory profile` command**: CLI profiler surfacing slowest DB queries and top N+1 read patterns from live ingestion.
+
+---
+
+## Longer-Term Research
 
 ## 1. "REM Sleep" Context Consolidation
 **Concept**: Overnight meta-pattern fusing.

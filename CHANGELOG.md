@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-14
+### Added
+- **`termstory agy` subcommand**: One-shot bridge to `agy -p` for instant AI pair-programming sessions; gracefully errors if `agy` is not on PATH.
+- **TUI status bar version + last ingestion**: `StatsHeader` now shows the running version (e.g. `v0.4.0`) and the timestamp of the most recently synced session.
+- **GitHub Actions CI pipeline**: Automated `pytest` across Python 3.9–3.12 with ruff lint check on every push/PR via `.github/workflows/ci.yml`.
+- **Performance regression tests** (`tests/test_performance.py`): Bulk 500-command ingestion must complete under 5 s; session loading is guarded against N+1 query patterns.
+- **E2E integration tests** (`tests/test_integration.py`): Three end-to-end scenarios covering search, project-name queries, and multi-session detection from long idle gaps.
+- **README badges**: PyPI version, CI status, Python versions, and MIT license shields added to the top of `README.md`.
+- **ROADMAP v0.4.x / v0.5.x sections**: Concrete near-term milestones now tracked alongside the long-term research items.
+
+### Changed
+- **`__version__`** bumped to `0.4.0` across `__init__.py`, `pyproject.toml`, and `setup.py`.
+
+### Fixed
+- **Skipped test** in `test_timestamp_detective.py`: `test_fuzzy_match_above_threshold` no longer uses a conditional `skipTest`; the assertion is now unconditional since the SequenceMatcher ratio is deterministic (≈ 0.923).
+
 ## [0.2.14] - 2026-06-08
 ### Added
 - **Thread Starvation Guards**: Implemented two-factor guards (`exclusive=True` on `@work` and wall-clock timeouts) to prevent thread pool exhaustion from UI requests and hung LLM sockets.

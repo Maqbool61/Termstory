@@ -55,3 +55,88 @@ def test_end_to_end_integration(tmp_path):
     assert len(results) == 1
     assert results[0]["session_id"] == 1
     assert "pytest --verbose" in results[0]["matching_commands"]
+
+
+def test_e2e_search_by_project_name(tmp_path):
+    """E2E: ingest history, save to DB, and search by project name."""
+    hist_file = tmp_path / "zsh_history"
+    now = 1717675200
+    lines = [
+        f": {now}:0;npm install\n",
+        f": {now + 60}:0;npm run build\n",
+    ]
+    hist_file.write_text("".join(lines), encoding="utf-8")
+
+    commands = parse_zsh_history(str(hist_file))
+    assert len(commands) == 2
+
+    project_root = find_project_root(str(tmp_path))
+    p1 = Project(id=1, name="MyWebApp", path=project_root, first_seen=now, last_seen=now + 60, session_count=1, total_time=60)
+
+    for cmd in commands:
+        cmd.project_id = p1.id
+
+    sessions = create_sessions(commands)
+    assert len(sessions) == 1
+    sessions[0].id = 1
+    sessions[0].project_id = p1.id
+    for cmd in commands:
+        cmd.session_id = sessions[0].id
+
+    db_file = tmp_path / "e2e_web.db"
+    db = Database(str(db_file))
+    db.init_db()
+    db.save_data([p1], sessions, commands)
+
+    # Search by command fragment
+    results = db.search_sessions("npm run build")
+    assert len(results) >= 1
+    assert any("npm run build" in r["matching_commands"] for r in results)
+
+
+def test_e2e_multiple_sessions(tmp_path):
+    """E2E: history with a long idle gap should produce 2 separate sessions."""
+    hist_file = tmp_path / "zsh_history"
+    now = 1717675200
+    gap = 35 * 60  # 35 minutes → exceeds 30-minute session threshold
+    lines = [
+        f": {now}:0;git status\n",
+        f": {now + 10}:0;git diff\n",
+        f": {now + gap}:0;python3 manage.py runserver\n",
+        f": {now + gap + 30}:0;python3 manage.py migrate\n",
+    ]
+    hist_file.write_text("".join(lines), encoding="utf-8")
+
+    commands = parse_zsh_history(str(hist_file))
+    assert len(commands) == 4
+
+    sessions = create_sessions(commands)
+    assert len(sessions) == 2, f"Expected 2 sessions, got {len(sessions)}"
+
+    db_file = tmp_path / "e2e_multi.db"
+    db = Database(str(db_file))
+    db.init_db()
+
+    project_root = find_project_root(str(tmp_path))
+    p1 = Project(id=1, name="Django App", path=project_root,
+                 first_seen=now, last_seen=now + gap + 30, session_count=2, total_time=gap + 30)
+
+    # Assign project_id and session_id before calling save_data so that the DB
+    # correctly links commands → sessions → projects for search indexing.
+    for i, sess in enumerate(sessions):
+        sess.id = i + 1
+        sess.project_id = p1.id
+
+    sess_boundary = sessions[0].end_time
+    for cmd in commands:
+        cmd.project_id = p1.id
+        if cmd.timestamp <= sess_boundary:
+            cmd.session_id = sessions[0].id
+        else:
+            cmd.session_id = sessions[1].id
+
+    db.save_data([p1], sessions, commands)
+
+    results = db.search_sessions("runserver")
+    assert len(results) >= 1
+    assert any("runserver" in r["matching_commands"] for r in results)

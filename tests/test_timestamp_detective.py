@@ -199,16 +199,12 @@ class TestDetectGitCommit(unittest.TestCase):
         result = self.d.detect_git_commit(
             'git commit -m "fix auth bug"', "/repos/myapp"
         )
-        # "fix auth bug" vs "fix auth debug" — should exceed 0.85 threshold
-        # (ratio ≈ 0.923); verify it returns a result
-        ratio = __import__('difflib').SequenceMatcher(
-            None, "fix auth bug", "fix auth debug"
-        ).ratio()
-        if ratio >= 0.85:
-            self.assertIsNotNone(result)
-        else:
-            # If ratio < 0.85 (shouldn't happen with these strings), skip assertion
-            self.skipTest(f"SequenceMatcher ratio {ratio:.2f} is below threshold — skipping")
+        # "fix auth bug" vs "fix auth debug" — ratio ≈ 0.923, always above the 0.85 threshold.
+        # Verify the result is returned unconditionally.
+        import difflib
+        ratio = difflib.SequenceMatcher(None, "fix auth bug", "fix auth debug").ratio()
+        self.assertGreaterEqual(ratio, 0.85, f"Sanity check: ratio {ratio:.3f} should be ≥ 0.85")
+        self.assertIsNotNone(result)
 
     @patch.object(TimestampDetective, "_find_git_root", return_value="/repos/myapp")
     def test_below_threshold_returns_none(self, _mock_root):
