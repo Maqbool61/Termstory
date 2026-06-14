@@ -42,7 +42,15 @@ class SlowlorisHandler(BaseHTTPRequestHandler):
         except (ConnectionResetError, BrokenPipeError):
             pass
 
-def start_slow_server(port=8889):
+def find_free_port():
+    import socket
+    s = socket.socket()
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+def start_slow_server(port):
     server = HTTPServer(('localhost', port), SlowlorisHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -52,9 +60,10 @@ def start_slow_server(port=8889):
 
 @pytest.mark.asyncio
 async def test_slowloris_tarpit(tmp_path, monkeypatch):
-    port = 8889
+    port = find_free_port()
     server = start_slow_server(port)
     time.sleep(0.5)
+
 
     db_path = str(tmp_path / "test.db")
     db = Database(db_path)

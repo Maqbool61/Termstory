@@ -36,15 +36,24 @@ class SlowlorisHandler(BaseHTTPRequestHandler):
         except (ConnectionResetError, BrokenPipeError):
             pass
 
-def start_slow_server(port=8888):
+def find_free_port():
+    import socket
+    s = socket.socket()
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+def start_slow_server(port):
     server = HTTPServer(('localhost', port), SlowlorisHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
 
 def test_slowloris_tarpit():
-    port = 8888
+    port = find_free_port()
     server = start_slow_server(port)
+
     
     # Let the server start
     time.sleep(0.5)

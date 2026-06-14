@@ -4,22 +4,24 @@ This document tracks long-term, transformational concepts for TermStory aligned 
 
 ---
 
-## v0.4.x — In Progress
+## Shipped in v0.5.0 (and v0.4.x)
 
 - **SQLite FTS5 Integration**: Full-Text Search across sessions, commands, and AI summaries for ranked, sub-millisecond matching.
 - **Concurrency Stress Tests & Massive History Simulations**: Multi-year synthetic history logs to harden ingestion race-condition coverage.
-- **Project-Specific AI Contexts**: Seed LLM prompts with per-project context descriptors for richer, more accurate narratives.
 - **`agy` Subcommand**: One-shot `termstory agy` to launch `agy -p` for quick AI pair-programming sessions bridged from shell history.
 - **Pre-Cognitive Workspace** (`termstory predict`): Pattern-based session analysis that predicts what a developer will work on next. Surfaces recency momentum, time-of-day affinity, day-of-week cadence, and interrupted session detection. Implemented in `predict.py` with full test coverage.
-- **"Ghost-in-the-Shell" TUI Playback**: Visual, step-by-step terminal playback of selected sessions (`termstory replay`) in fast/slow motion.
+- **"Ghost-in-the-Shell" TUI Playback** (`termstory replay`): Visual, step-by-step terminal playback of selected sessions in fast/slow motion.
+- **GitHub Actions CI Pipeline**: Automated `pytest` + lint gate on every PR via `.github/workflows/ci.yml`.
+- **Advanced Search Subcommand** (`termstory search`): Filter matches with query, project, tags, and date ranges.
 
 ---
 
-## v0.5.x — Planned
+## v0.5.x — In Progress & Planned
 
-- **GitHub Actions CI Pipeline**: Automated `pytest` + lint gate on every PR via `.github/workflows/ci.yml`.
+- **Project-Specific AI Contexts**: Seed LLM prompts with per-project context descriptors for richer, more accurate narratives.
 - **PyPI automated release workflow**: Tag-triggered build and publish pipeline.
 - **`termstory profile` command**: CLI profiler surfacing slowest DB queries and top N+1 read patterns from live ingestion.
+
 
 ---
 

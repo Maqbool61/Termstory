@@ -80,3 +80,66 @@ def test_database_commits_and_search(tmp_path, monkeypatch):
     results = db.search_sessions("supervision")
     assert len(results) == 1
     assert results[0]["session_id"] == 1
+
+
+def test_advanced_search(tmp_path, monkeypatch):
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-06 12:00:00")
+    db_file = tmp_path / "test_advanced_search.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    from datetime import datetime
+    now = int(datetime(2026, 6, 6, 12, 0, 0).timestamp())
+    
+    p1 = Project(id=1, name="Project A", path="~/projects/a", first_seen=now, last_seen=now, session_count=1, total_time=100)
+    p2 = Project(id=2, name="Project B", path="~/projects/b", first_seen=now, last_seen=now, session_count=1, total_time=150)
+    
+    cmd1 = Command(timestamp=now, command="docker compose up", session_id=1, project_id=1)
+    s1 = Session(id=1, start_time=now, end_time=now + 100, duration_seconds=100, project_id=1, commands=[cmd1])
+    s1.tags = "deploy,debug"
+    
+    cmd2 = Command(timestamp=now + 10000, command="npm run build", session_id=2, project_id=2)
+    s2 = Session(id=2, start_time=now + 10000, end_time=now + 10100, duration_seconds=100, project_id=2, commands=[cmd2])
+    s2.tags = "setup,test"
+    
+    db.save_data([p1, p2], [s1, s2], [cmd1, cmd2])
+    
+    from termstory.search import advanced_search
+    
+    # 1. Search with no query but project filter
+    results = advanced_search(db, project_filter="Project A")
+    assert len(results) == 1
+    assert results[0]["session_id"] == 1
+    
+    # 2. Search with query and project filter
+    results = advanced_search(db, query="compose", project_filter="Project A")
+    assert len(results) == 1
+    
+    # 3. Search with tag filters
+    results = advanced_search(db, tag_filters=["deploy"])
+    assert len(results) == 1
+    assert results[0]["session_id"] == 1
+    
+    # 4. Search with multiple tag filters (match all)
+    results = advanced_search(db, tag_filters=["deploy", "debug"])
+    assert len(results) == 1
+    
+    # Non-existent combo
+    results = advanced_search(db, tag_filters=["deploy", "setup"])
+    assert len(results) == 0
+    
+    # 5. Search with date ranges
+    # Since filter
+    results = advanced_search(db, since_ts=now + 5000)
+    assert len(results) == 1
+    assert results[0]["session_id"] == 2
+    
+    # Until filter
+    results = advanced_search(db, until_ts=now + 5000)
+    assert len(results) == 1
+    assert results[0]["session_id"] == 1
+    
+    # Both filters
+    results = advanced_search(db, since_ts=now - 100, until_ts=now + 15000)
+    assert len(results) == 2
+

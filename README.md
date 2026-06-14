@@ -47,10 +47,11 @@ termstory search query
 11. [AI Client](#11-ai-client)
 12. [TUI Dashboard](#12-tui-dashboard)
 13. [AI Narrative Design](#13-ai-narrative-design)
-14. [CLI Reference](#14-cli-reference)
-15. [Configuration](#15-configuration)
-16. [Testing](#16-testing)
-17. [Troubleshooting](#17-troubleshooting)
+14. [Extended Commands & Features](#14-extended-commands--features)
+15. [CLI Reference](#15-cli-reference)
+16. [Configuration](#16-configuration)
+17. [Testing](#17-testing)
+18. [Troubleshooting](#18-troubleshooting)
 
 ---
 
@@ -641,7 +642,54 @@ When a date is selected in the TUI, a full "Story of You" daily narrative is gen
 
 ---
 
-## 14. CLI Reference
+## 14. Extended Commands & Features
+
+In addition to the core TUI dashboard and daily timeline, TermStory features a suite of advanced CLI subcommands:
+
+### 🧠 Ask (Natural Language Q&A)
+Use semantic Q&A and search over your developer history. `termstory ask` retrieves relevant sessions using BM25 context retrieval combined with LLM processing to answer questions like:
+- `termstory ask "What did I work on last Monday?"`
+- `termstory ask "When did I fix the database deadlocks?"`
+
+### 🔮 Predict (Pre-Cognitive Workspace)
+The pre-cognitive workspace predicts what project or workspace you will work on next based on historical transition probabilities and time-of-day patterns.
+- `termstory predict`
+- `termstory predict --top 5`
+- `termstory predict --json`
+
+### 📹 Replay (Terminal Session Playback)
+Replay the exact commands and delays of a past development session directly in your terminal like a movie.
+- `termstory replay`
+- `termstory replay <session_id>`
+- `termstory replay --speed 2.0`
+- `termstory replay --list`
+
+### 💡 Insights (Executive Focus & Activity)
+Calculate developer focus scores, time-of-day work distributions, and project focus metrics to highlight active days, total durations, and main achievements.
+- `termstory insights`
+
+### 🌐 Web (HTML Report Generator)
+Generate and automatically open a beautiful, high-density HTML report of your TermStory history and AI chronicles in your web browser.
+- `termstory web`
+
+### 📤 Export (Structured Data Export)
+Export all or filtered sessions as JSON or CSV files to share or perform custom analysis.
+- `termstory export --format json`
+- `termstory export --format csv --output history.csv`
+
+### 📊 Stats (Detailed Work Telemetry)
+Compute and display high-density, CLI-native command category breakdown tables, tool usage, and terminal telemetry.
+- `termstory stats`
+
+### 🏷️ Tags (Session Classification)
+Auto-classify and tag sessions (`deploy`, `debug`, `setup`, `test`, `docs`) based on shell commands and git commit messages.
+- `termstory tags`
+- `termstory tags debug`
+- `termstory tags --rebuild`
+
+---
+
+## 15. CLI Reference
 
 ### Daily
 
@@ -779,7 +827,7 @@ termstory optimize                   # Vacuum SQLite database and rebuild indexe
 
 ---
 
-## 15. Configuration
+## 16. Configuration
 
 Config lives at `~/.termstory/config.json`:
 
@@ -824,7 +872,7 @@ Key configuration parameters:
 
 ---
 
-## 16. Testing
+## 17. Testing
 
 ```bash
 python3 -m pytest tests/ -v
@@ -848,7 +896,7 @@ python3 -m pytest tests/ -v
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 ### Reset everything
 

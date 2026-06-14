@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-14
+### Added
+- **Advanced Search Subcommand (`termstory search`)**: Added multi-filter capability to search sessions, commands, and commits by date range (`--since`, `--until`), project (`--project`), and tags (`--tag`/`-t`), using the newly introduced `termstory/search.py` module.
+- **Detailed Command Documentation**: Expanded `README.md` with dedicated documentation sections explaining the inner workings, parameters, and examples for all advanced CLI subcommands (`ask`, `predict`, `replay`, `insights`, `web`, `export`, `stats`, `tags`).
+- **Roadmap Updates**: Shifted completed technical milestones (SQLite FTS5, Concurrency tests, agy, predict, replay, CI, search) into the "Shipped" section in `ROADMAP.md`.
+
+### Changed
+- **Version Bump**: Promoted version to `0.5.0` across `__init__.py`, `setup.py`, and `pyproject.toml`.
+
+### Fixed
+- **Flaky Slowloris Tests**: Modified `tests/stress/test_slowloris.py` and `tests/stress/test_slowloris_tui.py` to bind to dynamic, OS-allocated ports (via port `0`), resolving socket conflicts and "Address already in use" OS errors.
+
 ## [0.4.0] - 2026-06-14
 ### Added
 - **`termstory agy` subcommand**: One-shot bridge to `agy -p` for instant AI pair-programming sessions; gracefully errors if `agy` is not on PATH.

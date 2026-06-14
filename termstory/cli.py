@@ -1,6 +1,6 @@
 import os
 import typer
-from typing import Optional
+from typing import Optional, List
 from dateutil import parser as date_parser
 
 from termstory.config import get_history_files, get_db_path
@@ -138,13 +138,15 @@ def run_ingestion(db: Database) -> None:
 
 @app.command("search")
 def search_history(
-    query: str = typer.Argument(..., help="Search term/query across commits, commands, and project names"),
+    query: Optional[str] = typer.Argument(None, help="Search term/query across commits, commands, and project names"),
     project: Optional[str] = typer.Option(None, "--project", help="Filter matches by project name"),
     since: Optional[str] = typer.Option(None, "--since", help="Filter matches since date YYYY-MM-DD"),
+    until: Optional[str] = typer.Option(None, "--until", help="Filter matches until date YYYY-MM-DD"),
+    tag: Optional[List[str]] = typer.Option(None, "--tag", "-t", help="Filter matches by tag(s) (deploy, debug, setup, test, docs)"),
     limit: int = typer.Option(50, "--limit", help="Maximum number of search results to return"),
     detailed: bool = typer.Option(False, "--detailed", help="Show all commands and commits in matched sessions"),
 ):
-    """Search across your work history (commits, commands, and projects)"""
+    """Search across your work history (commits, commands, and projects) with advanced filters"""
     db_path = get_db_path()
     db = Database(db_path)
     safe_init_db(db)
@@ -159,14 +161,41 @@ def search_history(
             Console(stderr=True).print(f"[bold red]Error: Could not parse date '{since}'[/]")
             raise typer.Exit(code=1)
             
-    results = db.search_sessions(query, project_filter=project, since_ts=since_ts)
+    until_ts = None
+    if until:
+        try:
+            until_ts = int(date_parser.parse(until).timestamp())
+        except Exception:
+            Console(stderr=True).print(f"[bold red]Error: Could not parse date '{until}'[/]")
+            raise typer.Exit(code=1)
+            
+    tag_list = None
+    if tag:
+        tag_list = []
+        for t in tag:
+            t_clean = t.strip().lower()
+            if t_clean not in ["deploy", "debug", "setup", "test", "docs"]:
+                Console(stderr=True).print(f"[bold red]Error: Invalid tag '{t_clean}'.[/bold red] Valid tags: deploy, debug, setup, test, docs.")
+                raise typer.Exit(code=1)
+            tag_list.append(t_clean)
+            
+    from termstory.search import advanced_search
+    results = advanced_search(
+        db,
+        query=query,
+        project_filter=project,
+        since_ts=since_ts,
+        until_ts=until_ts,
+        tag_filters=tag_list
+    )
     
     # Limit results
     results = results[:limit]
     
-    output = format_search_results(query, results, detailed=detailed)
+    output = format_search_results(query or "", results, detailed=detailed)
     from rich.text import Text
     console.print(Text.from_ansi(output))
+
 
 @app.command("today")
 def show_today(
