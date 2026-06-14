@@ -585,6 +585,42 @@ def replay_cmd(
     run_replay(db, session_id=session_id, speed=speed, list_sessions=list_sessions)
 
 
+@app.command("export")
+def export_cmd(
+    format: str = typer.Option("json", "--format", "-f", help="Export format: 'json' or 'csv'"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (prints to stdout if omitted)"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name or path"),
+    since: Optional[str] = typer.Option(None, "--since", "-s", help="Filter by since duration (e.g. '7' for 7 days, or YYYY-MM-DD)")
+):
+    """Export history sessions and commands as JSON or CSV"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    from termstory.exporter import fetch_export_data, export_json, export_csv
+    
+    try:
+        sessions = fetch_export_data(db, project_filter=project, since_str=since)
+    except ValueError as e:
+        Console(stderr=True).print(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(code=1)
+        
+    if not sessions:
+        Console(stderr=True).print("[yellow]No sessions found matching filters.[/yellow]")
+        raise typer.Exit(code=0)
+        
+    fmt = format.lower().strip()
+    if fmt == "json":
+        export_json(sessions, db, output_file=output)
+    elif fmt == "csv":
+        export_csv(sessions, db, output_file=output)
+    else:
+        Console(stderr=True).print(f"[bold red]Error: Unsupported format '{format}'. Use 'json' or 'csv'.[/]")
+        raise typer.Exit(code=1)
+
+
 # ==========================================
 # CONFIG SUBCOMMANDS
 # ==========================================
