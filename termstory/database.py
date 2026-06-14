@@ -1127,7 +1127,7 @@ class Database:
         finally:
             conn.close()
             
-        if fts_enabled:
+        if fts_enabled and query:
             try:
                 return self.search_fts5(query, project_filter, since_ts)
             except sqlite3.OperationalError:

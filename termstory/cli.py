@@ -780,6 +780,26 @@ def export_cmd(
         Console(stderr=True).print(f"[bold red]Error: Unsupported format '{format}'. Use 'json' or 'csv'.[/]")
         raise typer.Exit(code=1)
 
+@app.command("backup")
+def backup_cmd():
+    """Create a timestamped backup of the TermStory database."""
+    from termstory.backup import backup_db
+    backup_path = backup_db()
+    console.print(f"[bold green]✅ Backup created at {backup_path}[/]")
+
+@app.command("restore")
+def restore_cmd(backup_path: str = typer.Argument(..., help="Path to the backup .db file to restore")):
+    """Restore the TermStory database from a backup file."""
+    from termstory.backup import restore_db
+    try:
+        restore_db(backup_path)
+        console.print(f"[bold green]✅ Database restored from {backup_path}[/]")
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Error: {e}[/]")
+        raise typer.Exit(code=1)
+
+
+
 
 # ==========================================
 # CONFIG SUBCOMMANDS
