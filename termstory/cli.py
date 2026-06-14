@@ -983,6 +983,122 @@ def obs():
     from termstory.hermes_obs import run_toggle
     run_toggle()
 
+@app.command("remind")
+def remind_cmd(
+    text: Optional[str] = typer.Argument(
+        None,
+        help="Reminder message/phrase (e.g. 'remind me about coding in 2 days' or 'fixing bug')"
+    ),
+    days: Optional[int] = typer.Option(
+        None, "--days", "-d",
+        help="Number of days until the reminder is due (override or default if phrase doesn't specify)"
+    ),
+    list_all: bool = typer.Option(
+        False, "--list", "-l",
+        help="List all active/pending reminders"
+    ),
+    complete: Optional[int] = typer.Option(
+        None, "--complete", "-c",
+        help="Complete a reminder by its ID"
+    ),
+    show_completed: bool = typer.Option(
+        False, "--show-completed", "-a",
+        help="Show completed reminders when listing"
+    )
+):
+    """Set, list, or complete reminders based on sessions."""
+    from datetime import datetime
+    import time
+    from termstory.reminder import load_reminders, add_reminder, complete_reminder
+    
+    # Complete a reminder
+    if complete is not None:
+        success = complete_reminder(complete)
+        if success:
+            console.print(f"[bold green]✅ Marked reminder #{complete} as completed![/]")
+        else:
+            console.print(f"[bold red]Error: Reminder #{complete} not found.[/]")
+            raise typer.Exit(code=1)
+        raise typer.Exit()
+        
+    # Set a reminder (if text is provided, or if days is provided)
+    if text is not None:
+        db_path = get_db_path()
+        db = Database(db_path)
+        safe_init_db(db)
+        
+        try:
+            rem = add_reminder(text, days=days, db=db)
+            due_date = datetime.fromtimestamp(rem["due_at"]).strftime("%Y-%m-%d")
+            console.print(
+                f"[bold green]🔔 Reminder set successfully![/]\n"
+                f"ID: [cyan]#{rem['id']}[/]\n"
+                f"About: '{rem['about']}'\n"
+                f"Project: [magenta]{rem['project_name']}[/]\n"
+                f"Due in: {rem['days']} days (on {due_date})"
+            )
+        except ValueError as e:
+            console.print(f"[bold red]Error:[/] {e}")
+            raise typer.Exit(code=1)
+        raise typer.Exit()
+        
+    # Otherwise list reminders (if list_all is true, or if no args are passed at all)
+    reminders = load_reminders()
+    if not reminders:
+        console.print("[yellow]No reminders found.[/yellow]")
+        raise typer.Exit()
+        
+    # Filter reminders
+    filtered = reminders if show_completed else [r for r in reminders if r.get("status") == "pending"]
+    
+    if not filtered:
+        console.print("[yellow]No pending reminders found.[/yellow]")
+        raise typer.Exit()
+        
+    from rich.box import SIMPLE
+    table = Table(title="⏰ TermStory Reminders", box=SIMPLE, border_style="cyan")
+    table.add_column("ID", style="cyan bold")
+    table.add_column("Status", style="bold")
+    table.add_column("Project", style="magenta")
+    table.add_column("Task / About", style="white")
+    table.add_column("Due Date / Time Left", style="green")
+    
+    now = time.time()
+    for r in filtered:
+        r_id = f"#{r['id']}"
+        status_val = r.get("status", "pending")
+        if status_val == "completed":
+            status_str = "[green]Completed[/green]"
+        else:
+            status_str = "[yellow]Pending[/yellow]"
+            
+        proj = r.get("project_name", "Other")
+        about = r.get("about", "")
+        
+        due_at = r.get("due_at", 0)
+        due_str = datetime.fromtimestamp(due_at).strftime("%Y-%m-%d")
+        
+        # Calculate time difference
+        diff = due_at - now
+        if status_val == "completed":
+            time_left = "Completed"
+        elif diff < 0:
+            days_overdue = int(abs(diff) // 86400)
+            if days_overdue == 0:
+                time_left = "[red]Overdue today[/red]"
+            else:
+                time_left = f"[red]Overdue by {days_overdue}d[/red]"
+        else:
+            days_left = int(diff // 86400)
+            if days_left == 0:
+                time_left = "Due today"
+            else:
+                time_left = f"Due in {days_left}d"
+                
+        table.add_row(r_id, status_str, proj, about, f"{due_str} ({time_left})")
+        
+    console.print(table)
+
 app.add_typer(config_app, name="config")
 
 
