@@ -848,7 +848,7 @@ def timeline_cmd(
     run_ingestion(db)
     from termstory.timeline import render_timeline
     output = render_timeline(db, days=days)
-    console.print(output)
+    typer.echo(output)
 
 @app.command("notebook")
 def notebook_cmd(
