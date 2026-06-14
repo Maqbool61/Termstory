@@ -219,20 +219,47 @@ def show_project(
     console.print(Text.from_ansi(output))
 
 @app.command("insights")
-def show_insights(
-    days: int = typer.Option(30, "--days", help="Number of days to analyze")
-):
-    """Show executive highlights and work patterns"""
+def show_insights():
+    """Show overall developer insights and activity dashboard"""
     db_path = get_db_path()
     db = Database(db_path)
     safe_init_db(db)
     
     run_ingestion(db)
     
-    insights = {"days": days}
-    output = format_insights_output(insights)
-    from rich.text import Text
-    console.print(Text.from_ansi(output))
+    from termstory.insights import analyze_all
+    stats = analyze_all(db)
+    
+    from termstory.models import format_duration
+    
+    output_lines = [
+        "📊 TermStory Executive Insights",
+        "",
+        "Metrics",
+        "────────────────────────────────────────",
+        f"Total Sessions : {stats['total_sessions']}",
+        f"Total Commands : {stats['total_commands']}",
+        f"Total Projects : {stats['total_projects']}",
+        f"Coding Streak  : {stats['streak']} days",
+        "",
+        "Activity Patterns",
+        "────────────────────────────────────────",
+        f"Most Active Day  : {stats['most_active_day']}",
+        f"Most Active Time : {stats['most_active_time']}",
+        "",
+        "Project Focus (Most Used)",
+        "────────────────────────────────────────"
+    ]
+    
+    top_projects = stats["most_used_projects"][:5]
+    for i, (name, duration) in enumerate(top_projects, 1):
+        output_lines.append(f"{i}. {name:<25} ({format_duration(duration)})")
+        
+    if not top_projects:
+        output_lines.append("No project data available.")
+        
+    console.print("\n".join(output_lines))
+
 
 @app.command("ask")
 def ask_cmd(

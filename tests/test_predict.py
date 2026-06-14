@@ -221,10 +221,10 @@ class TestPredictorRanking:
              "commands": ["npm run dev", "git add ."]},
             {"start": now - timedelta(hours=4), "project": "ProjectA",
              "commands": ["npm run dev"]},
-            # Project B: 6 days ago
-            {"start": now - timedelta(days=6), "project": "ProjectB",
+            # Project B: 8 days ago
+            {"start": now - timedelta(days=8), "project": "ProjectB",
              "commands": ["cargo build", "cargo test"]},
-            {"start": now - timedelta(days=6, hours=2), "project": "ProjectB",
+            {"start": now - timedelta(days=8, hours=2), "project": "ProjectB",
              "commands": ["cargo build"]},
         ]
         db_path = _make_db(specs)

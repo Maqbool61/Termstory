@@ -57,3 +57,46 @@ def test_insights_calculations():
     assert len(patterns) > 0
     assert any("Project Alpha" in p for p in patterns)
     assert any("git" in p.lower() for p in patterns)
+
+
+def test_analyze_all(tmp_path, monkeypatch):
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-01 12:00:00")
+    
+    db_file = tmp_path / "test_insights.db"
+    from termstory.database import Database
+    db = Database(str(db_file))
+    db.init_db()
+    
+    from termstory.models import Project, Session, Command
+    from datetime import datetime
+    
+    # 2026-06-01 12:00:00 is Monday
+    now = int(datetime(2026, 6, 1, 12, 0, 0).timestamp())
+    
+    p1 = Project(id=1, name="Project Alpha", path="~/alpha", first_seen=now, last_seen=now, session_count=1, total_time=3600)
+    p2 = Project(id=2, name="Project Beta", path="~/beta", first_seen=now, last_seen=now, session_count=1, total_time=1800)
+    
+    c1 = Command(timestamp=now, command="git commit -m 'feat: first commit'", session_id=1, project_id=1, is_legacy=False)
+    s1 = Session(id=1, start_time=now, end_time=now + 3600, duration_seconds=3600, project_id=1, commands=[c1], is_legacy=False)
+    
+    c2 = Command(timestamp=now + 7200, command="docker run nginx", session_id=2, project_id=2, is_legacy=False)
+    s2 = Session(id=2, start_time=now + 7200, end_time=now + 9000, duration_seconds=1800, project_id=2, commands=[c2], is_legacy=False)
+    
+    db.save_data([p1, p2], [s1, s2], [c1, c2])
+    
+    from termstory.insights import analyze_all
+    stats = analyze_all(db)
+    
+    assert stats["total_sessions"] == 2
+    assert stats["total_commands"] == 2
+    assert stats["total_projects"] == 2
+    assert stats["streak"] == 1
+    assert stats["most_active_day"] == "Monday"
+    assert stats["most_active_time"] == "afternoon"
+    assert len(stats["most_used_projects"]) == 2
+    assert stats["most_used_projects"][0][0] == "Project Alpha"
+    assert stats["most_used_projects"][0][1] == 3600
+    assert stats["most_used_projects"][1][0] == "Project Beta"
+    assert stats["most_used_projects"][1][1] == 1800
+
+

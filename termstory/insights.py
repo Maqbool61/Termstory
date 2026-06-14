@@ -174,3 +174,124 @@ def detect_patterns_and_anomalies(sessions: List[Session], projects: List[Projec
             insights.append("You switch projects less on Fridays compared to other days")
             
     return insights
+
+def calculate_streak(sessions: List[Session]) -> int:
+    """Calculate consecutive active work days ending today or on the last active day."""
+    if not sessions:
+        return 0
+    active_dates = {
+        datetime.fromtimestamp(s.start_time).date()
+        for s in sessions
+    }
+    if not active_dates:
+        return 0
+    
+    sorted_dates = sorted(list(active_dates), reverse=True)
+    streak = 1
+    current_date = sorted_dates[0]
+    
+    # Allow a gap of at most 1 day (e.g. if today is inactive but yesterday was active, streak is still active)
+    from termstory.date_utils import get_current_time
+    today = get_current_time().date()
+    if (today - current_date).days > 1:
+        return 0
+        
+    for d in sorted_dates[1:]:
+        if (current_date - d).days == 1:
+            streak += 1
+            current_date = d
+        elif (current_date - d).days > 1:
+            break
+    return streak
+
+def analyze_all(db=None) -> Dict:
+    """Analyze all recorded history to produce total counts, most active periods,
+    most used projects, and current coding streak.
+    """
+    if db is None:
+        from termstory.config import get_db_path
+        from termstory.database import Database
+        db = Database(get_db_path())
+        
+    conn = db.get_connection()
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM sessions")
+        total_sessions = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM commands")
+        total_commands = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM projects")
+        total_projects = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT id, name FROM projects")
+        project_names = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        cursor.execute("""
+            SELECT s.id, s.start_time, s.end_time, s.duration_seconds, s.project_id,
+                   (SELECT IFNULL(SUM(c.is_legacy) = COUNT(c.id), 0) FROM commands c WHERE c.session_id = s.id) AS is_legacy
+            FROM sessions s
+        """)
+        session_rows = cursor.fetchall()
+    finally:
+        conn.close()
+        
+    sessions = []
+    for row in session_rows:
+        s_id, start, end, duration, p_id, is_legacy = row
+        sessions.append(Session(
+            id=s_id,
+            start_time=start,
+            end_time=end,
+            duration_seconds=duration,
+            project_id=p_id,
+            commands=[],
+            commits=[],
+            is_legacy=bool(is_legacy)
+        ))
+        
+    real_sessions = [s for s in sessions if not getattr(s, "is_legacy", False)]
+    
+    # Calculate streak using non-legacy sessions
+    streak = calculate_streak(real_sessions)
+    
+    # Calculate day distribution using non-legacy sessions
+    day_dist = calculate_day_distribution(real_sessions)
+    if any(day_dist.values()):
+        most_active_day = max(day_dist.items(), key=lambda x: x[1])[0]
+    else:
+        most_active_day = "N/A"
+        
+    # Calculate time of day distribution using non-legacy sessions
+    time_dist = calculate_time_of_day_distribution(real_sessions)
+    if any(time_dist.values()):
+        most_active_time = max(time_dist.items(), key=lambda x: x[1])[0]
+    else:
+        most_active_time = "N/A"
+        
+    # Most used projects (can include all sessions, or real sessions. Let's use all sessions to reflect total time)
+    project_durations = defaultdict(int)
+    for s in sessions:
+        name = "Other"
+        if s.project_id is not None:
+            raw_name = project_names.get(s.project_id, "Other")
+            if raw_name == "General / No Project" or not raw_name:
+                name = "Other"
+            else:
+                name = raw_name
+        project_durations[name] += s.duration_seconds
+        
+    sorted_projects = sorted(project_durations.items(), key=lambda x: x[1], reverse=True)
+    
+    return {
+        "total_sessions": total_sessions,
+        "total_commands": total_commands,
+        "total_projects": total_projects,
+        "most_active_day": most_active_day,
+        "most_active_time": most_active_time,
+        "most_used_projects": sorted_projects,
+        "streak": streak
+    }
+
