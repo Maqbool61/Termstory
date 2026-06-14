@@ -816,6 +816,43 @@ def timeline_cmd(
     output = render_timeline(db, days=days)
     console.print(output)
 
+@app.command("notebook")
+def notebook_cmd(
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output markdown file path (prints to stdout if omitted)"),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name or path"),
+    since: Optional[str] = typer.Option(None, "--since", "-s", help="Filter by since duration (e.g. '7' for 7 days, or YYYY-MM-DD)"),
+    all_commands: bool = typer.Option(False, "--all-commands", help="Include all commands (including navigation/utility noise)"),
+    reverse: bool = typer.Option(False, "--reverse", help="Sort days reverse-chronologically (latest first)"),
+):
+    """Export history sessions as a Markdown notebook/journal grouped by day"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    from termstory.exporter import fetch_export_data
+    from termstory.notebook import generate_notebook
+    
+    try:
+        sessions = fetch_export_data(db, project_filter=project, since_str=since)
+    except ValueError as e:
+        Console(stderr=True).print(f"[bold red]Error:[/] {e}")
+        raise typer.Exit(code=1)
+        
+    if not sessions:
+        Console(stderr=True).print("[yellow]No sessions found matching filters.[/yellow]")
+        raise typer.Exit(code=0)
+        
+    markdown_content = generate_notebook(sessions, db, all_commands=all_commands, reverse=reverse)
+    
+    if output and output != "-":
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+        console.print(f"[bold green]✅ Notebook successfully exported to {output}[/]")
+    else:
+        sys.stdout.write(markdown_content)
+
 # CONFIG SUBCOMMANDS
 # ==========================================
 
