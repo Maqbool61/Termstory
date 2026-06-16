@@ -13,6 +13,7 @@ from termstory.project import disambiguate_project_names
 from rich.console import Console, Group
 from rich.table import Table
 from rich.text import Text
+from rich.markup import escape
 
 
 DISPLAY_NAMES = {
@@ -147,7 +148,7 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
             diff_color = "green" if diff >= 0 else "red"
             compare_str = f", [{diff_color}]{sign}{format_duration(abs(diff))} vs yesterday[/]"
             
-        proj_header = f"[bold cyan]{proj_name}[/] [dim]({format_duration(total_time_seconds)}{compare_str})[/]"
+        proj_header = f"[bold cyan]{escape(proj_name)}[/] [dim]({format_duration(total_time_seconds)}{compare_str})[/]"
         output_lines.append(proj_header)
         output_lines.append("[dim]────────────────────[/]")
         
@@ -161,7 +162,7 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
                 mem = f"{msg} (commit)"
                 if mem not in seen_memories:
                     seen_memories.add(mem)
-                    bullet_lines.append(f"• {mem}")
+                    bullet_lines.append(f"• {escape(mem)}")
             
             # 2. Key non-noise commands if no commits
             if not s.commits:
@@ -171,7 +172,7 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
                     cleaned = clean_command_to_memory(best_cmd)
                     if cleaned not in seen_memories:
                         seen_memories.add(cleaned)
-                        bullet_lines.append(f"• {cleaned}")
+                        bullet_lines.append(f"• {escape(cleaned)}")
                 else:
                     # 3. Fallback: raw commands
                     raw_cmds = []
@@ -182,7 +183,7 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
                         cleaned = clean_command_to_memory(cmd)
                         if cleaned not in seen_memories:
                             seen_memories.add(cleaned)
-                            bullet_lines.append(f"• {cleaned}")
+                            bullet_lines.append(f"• {escape(cleaned)}")
                             
         for line in bullet_lines:
             output_lines.append(line)
@@ -231,7 +232,7 @@ def format_week_output(sessions: List[Session], projects: List[Project], start_t
         total_week_time += proj_total_time
         
         proj_group_items = [
-            Text.from_markup(f"📁 [bold cyan]{proj_name}[/] ([dim]{len(proj_sessions)} {session_word}[/])"),
+            Text.from_markup(f"📁 [bold cyan]{escape(proj_name)}[/] ([dim]{len(proj_sessions)} {session_word}[/])"),
             Text.from_markup(f"⏱️  Total Time: [bold green]{format_duration(proj_total_time)}[/]\n")
         ]
         
@@ -280,7 +281,7 @@ def format_week_output(sessions: List[Session], projects: List[Project], start_t
             for c in proj_commits[:10]:
                 short_hash = c["hash"][:7]
                 msg = c["cleaned_message"] or c["message"]
-                commit_lines.append(f"  [bold yellow]•[/] [cyan]{short_hash}[/] {msg}")
+                commit_lines.append(f"  [bold yellow]•[/] [cyan]{short_hash}[/] {escape(msg)}")
             if len(proj_commits) > 10:
                 commit_lines.append(f"  [dim]... and {len(proj_commits) - 10} more commits[/]")
             proj_group_items.append(Text.from_markup("\n".join(commit_lines)))
@@ -352,7 +353,7 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
         days_str = ", ".join(f"{d.strftime('%b')} {d.day}" for d in sorted_dates)
         
         proj_group_items = [
-            Text.from_markup(f"📁 [bold cyan]{proj_name}[/]"),
+            Text.from_markup(f"📁 [bold cyan]{escape(proj_name)}[/]"),
             Text.from_markup(f"⏱️  Total: [bold green]{format_duration(proj_total_time)}[/] ({days_worked} {day_word} worked)"),
             Text.from_markup(f"  Days: [dim]{days_str}[/]")
         ]
@@ -379,7 +380,7 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
 def format_project_output(sessions: List[Session], project: Project) -> str:
     """Format project-specific detailed history as a clean, box-free list"""
     if not sessions:
-        return f"📁 Project: [bold cyan]{project.name}[/] [dim]({project.path})[/]\n\nNo activity recorded."
+        return f"📁 Project: [bold cyan]{escape(project.name)}[/] [dim]({escape(project.path)})[/]\n\nNo activity recorded."
 
     total_time_seconds = sum(s.duration_seconds for s in sessions)
     unique_days_set = set(datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d") for s in sessions)
@@ -387,7 +388,7 @@ def format_project_output(sessions: List[Session], project: Project) -> str:
     day_word = "day" if unique_days == 1 else "days"
 
     header_lines = [
-        f"📁 Project: [bold cyan]{project.name}[/] [dim]({project.path})[/]",
+        f"📁 Project: [bold cyan]{escape(project.name)}[/] [dim]({escape(project.path)})[/]",
         f"Active: [bold]{unique_days}[/] {day_word} worked | Total: [bold green]{format_duration(total_time_seconds)}[/]",
         ""
     ]
@@ -449,9 +450,9 @@ def format_project_output(sessions: List[Session], project: Project) -> str:
 
         for idx, mem in enumerate(day_memories):
             if idx == 0:
-                output_lines.append(f"{day_str:<8}  {mem}")
+                output_lines.append(f"{day_str:<8}  {escape(mem)}")
             else:
-                output_lines.append(f"{'':<8}  {mem}")
+                output_lines.append(f"{'':<8}  {escape(mem)}")
 
     return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
 
@@ -481,7 +482,7 @@ def format_projects_list(projects: List[Project]) -> str:
         last_str = f"{last_dt.strftime('%b')} {last_dt.day}, {last_dt.strftime('%Y')}"
         table.add_row(
             str(idx),
-            name,
+            escape(name),
             format_duration(p.total_time),
             str(p.session_count),
             f"{first_str} - {last_str}"
@@ -519,7 +520,7 @@ def format_detailed_sessions(sessions: List[Session]) -> str:
         for cmd in s.commands:
             t_str = datetime.fromtimestamp(cmd.timestamp).strftime("%H:%M:%S")
             exit_style = "green" if cmd.exit_code == 0 else "bold red"
-            table.add_row(t_str, cmd.command, f"[{exit_style}]{cmd.exit_code}[/]")
+            table.add_row(t_str, escape(cmd.command), f"[{exit_style}]{cmd.exit_code}[/]")
             
         # If there are commits in this session, show them too!
         commit_group = None
@@ -528,7 +529,7 @@ def format_detailed_sessions(sessions: List[Session]) -> str:
             commit_table.add_column("Hash", style="cyan", width=8)
             commit_table.add_column("Commit Message")
             for c in s.commits:
-                commit_table.add_row(c["hash"][:7], c["cleaned_message"] or c["message"])
+                commit_table.add_row(c["hash"][:7], escape(c["cleaned_message"] or c["message"]))
             commit_group = commit_table
             
         session_group = [Text.from_markup(session_title), table]
@@ -1512,6 +1513,116 @@ def format_profile_output(db, limit: int = 10) -> str:
     output_lines.append(indented_freq)
     
     return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
+
+
+def format_anger_translation(translation: str) -> str:
+    """Format the raw LLM output of anger translation into a clean developer-focused layout."""
+    from rich.markup import escape
+    output_lines = [
+        "[bold red]Git-Blame Anger Translator[/bold red]",
+        "[dim]───────────────────────────────────────────────────────────────[/]",
+        escape(translation.strip()),
+        "[dim]───────────────────────────────────────────────────────────────[/]"
+    ]
+    return render_to_string(Text.from_markup("\n".join(output_lines)))
+
+
+def format_anger_translation_heuristics(commit_data: List[Dict]) -> str:
+    """Provide a witty heuristic translation of emotions from commit history and preceding shell errors."""
+    output_lines = [
+        "😡 [bold red]Git-Blame Anger Translator (Heuristic Fallback Mode)[/bold red]",
+        "[dim]────────────────────────────────────────────────────────────────────────────────[/]",
+    ]
+    
+    for item in commit_data:
+        commit_hash = item.get("hash", "unknown")[:7]
+        commit_msg = item.get("message", "")
+        errors = item.get("preceding_errors", [])
+        
+        # Analyze emotion
+        if len(errors) > 3:
+            emotion = "🤬 RAGE & DESPAIR"
+            emoji = "🤬"
+            color = "red"
+            roast = "You fired off a barrage of failing commands before this commit. The anger is palpable. Did you punch the desk?"
+        elif 1 <= len(errors) <= 3:
+            emotion = "😩 FRUSTRATION / WORKAROUND"
+            emoji = "😩"
+            color = "yellow"
+            roast = "A few syntax/compilation issues tripped you up. You fixed it, committed, and pretended everything was fine."
+        else:
+            emotion = "🏆 TRIUMPH / SMOOTH SAILING"
+            emoji = "🏆"
+            color = "green"
+            roast = "Zero preceding terminal errors. Either you wrote perfect code, or you did all of the testing inside your IDE."
+            
+        if any(x in commit_msg.lower() for x in ["fix", "bug", "crash", "issue"]):
+            emotion = "🩹 EXHAUSTION / PATCHING SHIT"
+            emoji = "🩹"
+            color = "magenta"
+            roast = "A bug fix was shipped, but we know it took some late-night soul searching and caffeine."
+
+        output_lines.append(f"[bold {color}]{emoji} {emotion}[/bold {color}] | Commit: [cyan]{commit_msg}[/] ([dim]{commit_hash}[/])")
+        if errors:
+            output_lines.append("  [dim]Preceding Failures:[/]")
+            for err in errors[:3]:
+                output_lines.append(f"    - [red]FAIL:[/] {err}")
+            if len(errors) > 3:
+                output_lines.append(f"    - ... and {len(errors) - 3} more errors")
+        output_lines.append(f"  [italic]{roast}[/italic]")
+        output_lines.append("")
+        
+    output_lines.append("[dim]────────────────────────────────────────────────────────────────────────────────[/]")
+    return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
+
+
+def format_bug_predictions(predictions: str) -> str:
+    """Format the raw LLM output of bug fortune predictions into a clean developer-focused layout."""
+    from rich.markup import escape
+    output_lines = [
+        "[bold yellow]Bug Fortune Teller[/bold yellow]",
+        "[dim]───────────────────────────────────────────────────────────────[/]",
+        escape(predictions.strip()),
+        "[dim]───────────────────────────────────────────────────────────────[/]"
+    ]
+    return render_to_string(Text.from_markup("\n".join(output_lines)))
+
+
+def format_bug_predictions_heuristics(sessions: List[Dict]) -> str:
+    """Witty heuristic bug prediction based on session telemetry when LLM is unavailable."""
+    output_lines = [
+        "🔮 [bold magenta]Predictive Bug Fortune Teller (Heuristic Fallback Mode)[/bold magenta]",
+        "[dim]────────────────────────────────────────────────────────────────────────────────[/]",
+    ]
+    
+    for s in sessions:
+        hour = s.get("hour", 0)
+        p_name = s.get("project_name", "Other")
+        failed = s.get("failed_commands", [])
+        cmds = s.get("commands", [])
+        
+        # Determine likely bug category
+        if any("docker" in cmd.lower() for cmd in cmds):
+            bug = "Docker Port Bind Collision / Zombie Container"
+            desc = "You ran docker multiple times late at night. There's a 90% chance a container is hanging, blocking port 8080 or local databases."
+        elif any("test" in cmd.lower() or "pytest" in cmd.lower() for cmd in cmds):
+            bug = "Mock Leak or Bypassed/Commented Assertion"
+            desc = "Multiple test errors around midnight suggest you got sick of fixing them and either commented one out or disabled a strict check."
+        elif any("amend" in cmd.lower() or "force" in cmd.lower() for cmd in cmds):
+            bug = "Detached HEAD or Git Desynchronization"
+            desc = "Desperate force-pushes or commit amends at this hour are a recipe for history corruption. Look out for branch conflicts."
+        else:
+            bug = "Sleep-Deprived Off-by-One or Typos"
+            desc = f"Your brain was at 10% capacity at {hour}:00. Double check your `<` vs `<=` boundaries and environment variable spelling."
+            
+        output_lines.append(f"[bold cyan]Session {s['session_id']} ({hour:02d}:00)[/] in [yellow]{p_name}[/]")
+        output_lines.append(f"  🚨 [bold red]Predicted Bug:[/] {bug}")
+        output_lines.append(f"  📝 [italic]{desc}[/italic]")
+        output_lines.append("")
+        
+    output_lines.append("[dim]────────────────────────────────────────────────────────────────────────────────[/]")
+    return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
+
 
 
 
