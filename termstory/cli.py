@@ -40,7 +40,14 @@ def safe_init_db(db: Database) -> None:
                 f"Your TermStory database was corrupted. It has been moved to {backup_path}.\n"
                 "Initializing a fresh database..."
             )
-            db.init_db()
+            try:
+                db.init_db()
+            except Exception as e2:
+                Console(stderr=True).print(
+                    "\n[bold red]Database Error[/bold red]\n"
+                    f"Could not initialize fresh database after corruption: {e2}"
+                )
+                sys.exit(1)
         else:
             Console(stderr=True).print(
                 "\n[bold red]Database Error[/bold red]\n"
@@ -293,7 +300,8 @@ def show_project(
             
         if show:
             context_val = target.project_context or ""
-            console.print(context_val)
+            from rich.markup import escape
+            console.print(escape(context_val))
         else:
             if not arg3:
                 Console(stderr=True).print(
@@ -416,12 +424,15 @@ def show_tags(
     if not tag:
         # Show summary of tags
         cursor.execute("SELECT id, tags, duration_seconds FROM sessions")
-        rows = cursor.fetchall()
         
         tag_counts = {t: 0 for t in TAGS}
         tag_durations = {t: 0 for t in TAGS}
         
-        for s_id, tags_str, duration in rows:
+        while True:
+            row = cursor.fetchone()
+            if not row:
+                break
+            s_id, tags_str, duration = row
             if tags_str:
                 parts = [p.strip() for p in tags_str.split(",") if p.strip()]
                 for p in parts:
@@ -586,7 +597,7 @@ def predict_cmd(
                 return obj.isoformat()
             raise TypeError(f"Not serialisable: {type(obj)}")
 
-        console.print(json.dumps(result, default=_serialise, indent=2))
+        print(json.dumps(result, default=_serialise, indent=2))
         return
 
     output = format_predict_output(result)
@@ -1104,17 +1115,19 @@ def backup_cmd():
     """Create a timestamped backup of the TermStory database."""
     from termstory.backup import backup_db
     backup_path = backup_db()
-    console.print(f"[bold green]✅ Backup created at {backup_path}[/]")
+    from rich.markup import escape
+    console.print(f"[bold green]✅ Backup created at {escape(backup_path)}[/]")
 
 @app.command("restore")
 def restore_cmd(backup_path: str = typer.Argument(..., help="Path to the backup .db file to restore")):
     """Restore the TermStory database from a backup file."""
     from termstory.backup import restore_db
+    from rich.markup import escape
     try:
         restore_db(backup_path)
-        console.print(f"[bold green]✅ Database restored from {backup_path}[/]")
+        console.print(f"[bold green]✅ Database restored from {escape(backup_path)}[/]")
     except FileNotFoundError as e:
-        console.print(f"[bold red]Error: {e}[/]")
+        console.print(f"[bold red]Error: {escape(str(e))}[/]")
         raise typer.Exit(code=1)
 
 
@@ -1168,7 +1181,8 @@ def notebook_cmd(
     if output and output != "-":
         with open(output, "w", encoding="utf-8") as f:
             f.write(markdown_content)
-        console.print(f"[bold green]✅ Notebook successfully exported to {output}[/]")
+        from rich.markup import escape
+        console.print(f"[bold green]✅ Notebook successfully exported to {escape(output)}[/]")
     else:
         sys.stdout.write(markdown_content)
 
@@ -1216,7 +1230,8 @@ def config_set(key: str, value: str):
     save_config(config)
     
     set_val = get_config_value(config, key)
-    console.print(f"[green]Set config key '{key}' to '{set_val}'[/]")
+    from rich.markup import escape
+    console.print(f"[green]Set config key '{escape(key)}' to '{escape(str(set_val))}'[/]")
 
 @config_app.command("get")
 def config_get(key: str):
@@ -1313,13 +1328,14 @@ def remind_cmd(
         safe_init_db(db)
         
         try:
+            from rich.markup import escape
             rem = add_reminder(text, days=days, db=db)
             due_date = datetime.fromtimestamp(rem["due_at"]).strftime("%Y-%m-%d")
             console.print(
                 f"[bold green]🔔 Reminder set successfully![/]\n"
                 f"ID: [cyan]#{rem['id']}[/]\n"
-                f"About: '{rem['about']}'\n"
-                f"Project: [magenta]{rem['project_name']}[/]\n"
+                f"About: '{escape(rem['about'])}'\n"
+                f"Project: [magenta]{escape(rem.get('project_name', 'Other'))}[/]\n"
                 f"Due in: {rem['days']} days (on {due_date})"
             )
         except ValueError as e:

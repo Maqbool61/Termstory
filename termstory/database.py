@@ -444,7 +444,7 @@ class Database:
                         VALUES (?, ?, ?, ?, ?)
                     """, (session.start_time, session.end_time, session.duration_seconds, session.project_id, session.tags))
                     db_id = cursor.lastrowid
-                    if db_id == 0:
+                    if cursor.rowcount == 0:
                         # INSERT OR IGNORE hit a conflict — fetch the existing row
                         cursor.execute("SELECT id FROM sessions WHERE start_time = ? AND (project_id = ? OR (project_id IS NULL AND ? IS NULL))", (session.start_time, session.project_id, session.project_id))
                         row = cursor.fetchone()
@@ -600,68 +600,95 @@ class Database:
                 ORDER BY start_time ASC
             """, (start_ts, end_ts))
             session_rows = cursor.fetchall()
-            
-            sessions = []
-            for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum, tags_str = row
-    
-                
-                # 2. Fetch all commands for this session, including recovery_source
-                # so the Chain of Custody tooltip can be displayed in the TUI.
-                cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
-                    FROM commands
-                    WHERE session_id = ?
-                    ORDER BY timestamp ASC
-                """, (s_id,))
-                cmd_rows = cursor.fetchall()
-
-                commands = []
-                for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
-                    commands.append(Command(
-                        id=c_id,
-                        timestamp=timestamp,
-                        command=command_text,
-                        exit_code=exit_code,
-                        session_id=s_id,
-                        project_id=cmd_p_id,
-                        recovery_source=rec_src,
-                        is_legacy=bool(is_legacy)
-                    ))
-                    
-                # 3. Fetch all commits for this session (5m pre, 10m post buffers)
-                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
-                commits = []
-                if p_id is not None:
-                    cursor.execute("""
-                        SELECT hash, timestamp, message, cleaned_message
-                        FROM commits
-                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
-                        ORDER BY timestamp ASC
-                    """, (p_id, start - 300, (end or start) + 600))
-                    for c_row in cursor.fetchall():
-                        commits.append({
-                            "hash": c_row[0],
-                            "timestamp": c_row[1],
-                            "message": c_row[2],
-                            "cleaned_message": c_row[3]
-                        })
-                        
-                sessions.append(Session(
-                    id=s_id,
-                    start_time=start,
-                    end_time=end,
-                    duration_seconds=duration,
-                    project_id=p_id,
-                    commands=commands,
-                    commits=commits,
-                    ai_summary=ai_sum,
-                    is_legacy=is_session_legacy,
-                    tags=tags_str
-                ))
+            sessions = self._build_sessions(cursor, session_rows)
         finally:
             conn.close()
+        return sessions
+
+    def _build_sessions(self, cursor, session_rows) -> List[Session]:
+        if not session_rows:
+            return []
+            
+        session_ids = [r[0] for r in session_rows]
+        s_ids_str = ",".join("?" for _ in session_ids)
+        
+        # Batch fetch commands
+        cursor.execute(f"""
+            SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
+            FROM commands
+            WHERE session_id IN ({s_ids_str})
+            ORDER BY timestamp ASC
+        """, session_ids)
+        all_cmd_rows = cursor.fetchall()
+        
+        commands_by_session = {s_id: [] for s_id in session_ids}
+        for c_row in all_cmd_rows:
+            c_id, timestamp, command_text, exit_code, c_s_id, cmd_p_id, rec_src, is_legacy = c_row
+            commands_by_session[c_s_id].append(Command(
+                id=c_id,
+                timestamp=timestamp,
+                command=command_text,
+                exit_code=exit_code,
+                session_id=c_s_id,
+                project_id=cmd_p_id,
+                recovery_source=rec_src,
+                is_legacy=bool(is_legacy)
+            ))
+            
+        # Batch fetch commits for projects involved in these sessions
+        project_ids = list(set(r[4] for r in session_rows if r[4] is not None))
+        commits_by_project = {}
+        if project_ids:
+            p_ids_str = ",".join("?" for _ in project_ids)
+            # Find the overall min and max timestamps with buffer
+            min_ts = min(r[1] for r in session_rows) - 300
+            max_ts = max((r[2] or r[1]) for r in session_rows) + 600
+            
+            cursor.execute(f"""
+                SELECT hash, timestamp, message, cleaned_message, project_id
+                FROM commits
+                WHERE project_id IN ({p_ids_str}) AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+            """, project_ids + [min_ts, max_ts])
+            
+            for c_row in cursor.fetchall():
+                p_id = c_row[4]
+                if p_id not in commits_by_project:
+                    commits_by_project[p_id] = []
+                commits_by_project[p_id].append({
+                    "hash": c_row[0],
+                    "timestamp": c_row[1],
+                    "message": c_row[2],
+                    "cleaned_message": c_row[3]
+                })
+                
+        sessions = []
+        for row in session_rows:
+            s_id, start, end, duration, p_id, ai_sum, tags_str = row
+            commands = commands_by_session.get(s_id, [])
+            is_session_legacy = all(c.is_legacy for c in commands) if commands else False
+            
+            commits = []
+            if p_id is not None and p_id in commits_by_project:
+                # filter commits for this session's time range
+                sess_start = start - 300
+                sess_end = (end or start) + 600
+                for c in commits_by_project[p_id]:
+                    if sess_start <= c["timestamp"] <= sess_end:
+                        commits.append(c)
+                        
+            sessions.append(Session(
+                id=s_id,
+                start_time=start,
+                end_time=end,
+                duration_seconds=duration,
+                project_id=p_id,
+                commands=commands,
+                commits=commits,
+                ai_summary=ai_sum,
+                is_legacy=is_session_legacy,
+                tags=tags_str
+            ))
         return sessions
 
     def get_projects_by_ids(self, project_ids: List[int]) -> List[Project]:
@@ -723,64 +750,7 @@ class Database:
                 ORDER BY start_time ASC
             """, session_ids)
             session_rows = cursor.fetchall()
-            
-            sessions = []
-            for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum, tags_str = row
-                
-                # Fetch commands including recovery_source for Chain of Custody
-                cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
-                    FROM commands
-                    WHERE session_id = ?
-                    ORDER BY timestamp ASC
-                """, (s_id,))
-                cmd_rows = cursor.fetchall()
-
-                commands = []
-                for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
-                    commands.append(Command(
-                        id=c_id,
-                        timestamp=timestamp,
-                        command=command_text,
-                        exit_code=exit_code,
-                        session_id=s_id,
-                        project_id=cmd_p_id,
-                        recovery_source=rec_src,
-                        is_legacy=bool(is_legacy)
-                    ))
-                    
-                # Fetch commits (with buffers)
-                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
-                commits = []
-                if p_id is not None:
-                    cursor.execute("""
-                        SELECT hash, timestamp, message, cleaned_message
-                        FROM commits
-                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
-                        ORDER BY timestamp ASC
-                    """, (p_id, start - 300, (end or start) + 600))
-                    for c_row in cursor.fetchall():
-                        commits.append({
-                            "hash": c_row[0],
-                            "timestamp": c_row[1],
-                            "message": c_row[2],
-                            "cleaned_message": c_row[3]
-                        })
-                        
-                sessions.append(Session(
-                    id=s_id,
-                    start_time=start,
-                    end_time=end,
-                    duration_seconds=duration,
-                    project_id=p_id,
-                    commands=commands,
-                    commits=commits,
-                    ai_summary=ai_sum,
-                    is_legacy=is_session_legacy,
-                    tags=tags_str
-                ))
+            sessions = self._build_sessions(cursor, session_rows)
         finally:
             conn.close()
         return sessions
@@ -798,64 +768,7 @@ class Database:
                 ORDER BY start_time ASC
             """, (start_ts, end_ts))
             session_rows = cursor.fetchall()
-            
-            sessions = []
-            for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum, tags_str = row
-    
-                
-                cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
-                    FROM commands
-                    WHERE session_id = ?
-                    ORDER BY timestamp ASC
-                """, (s_id,))
-                cmd_rows = cursor.fetchall()
-
-                commands = []
-                for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
-                    commands.append(Command(
-                        id=c_id,
-                        timestamp=timestamp,
-                        command=command_text,
-                        exit_code=exit_code,
-                        session_id=s_id,
-                        project_id=cmd_p_id,
-                        recovery_source=rec_src,
-                        is_legacy=bool(is_legacy)
-                    ))
-                    
-                # 3. Fetch all commits for this session (5m pre, 10m post buffers)
-                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
-                commits = []
-                if p_id is not None:
-                    cursor.execute("""
-                        SELECT hash, timestamp, message, cleaned_message
-                        FROM commits
-                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
-                        ORDER BY timestamp ASC
-                    """, (p_id, start - 300, (end or start) + 600))
-                    for c_row in cursor.fetchall():
-                        commits.append({
-                            "hash": c_row[0],
-                            "timestamp": c_row[1],
-                            "message": c_row[2],
-                            "cleaned_message": c_row[3]
-                        })
-                        
-                sessions.append(Session(
-                    id=s_id,
-                    start_time=start,
-                    end_time=end,
-                    duration_seconds=duration,
-                    project_id=p_id,
-                    commands=commands,
-                    commits=commits,
-                    ai_summary=ai_sum,
-                    is_legacy=is_session_legacy,
-                    tags=tags_str
-                ))
+            sessions = self._build_sessions(cursor, session_rows)
         finally:
             conn.close()
         return sessions
@@ -873,64 +786,7 @@ class Database:
                 ORDER BY start_time ASC
             """, (project_id, start_ts))
             session_rows = cursor.fetchall()
-            
-            sessions = []
-            for row in session_rows:
-                s_id, start, end, duration, p_id, ai_sum, tags_str = row
-    
-                
-                cursor.execute("""
-                    SELECT id, timestamp, command, exit_code, session_id, project_id, recovery_source, is_legacy
-                    FROM commands
-                    WHERE session_id = ?
-                    ORDER BY timestamp ASC
-                """, (s_id,))
-                cmd_rows = cursor.fetchall()
-
-                commands = []
-                for c_row in cmd_rows:
-                    c_id, timestamp, command_text, exit_code, _, cmd_p_id, rec_src, is_legacy = c_row
-                    commands.append(Command(
-                        id=c_id,
-                        timestamp=timestamp,
-                        command=command_text,
-                        exit_code=exit_code,
-                        session_id=s_id,
-                        project_id=cmd_p_id,
-                        recovery_source=rec_src,
-                        is_legacy=bool(is_legacy)
-                    ))
-                    
-                # 3. Fetch all commits for this session (5m pre, 10m post buffers)
-                is_session_legacy = all(c.is_legacy for c in commands) if commands else False
-                commits = []
-                if p_id is not None:
-                    cursor.execute("""
-                        SELECT hash, timestamp, message, cleaned_message
-                        FROM commits
-                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
-                        ORDER BY timestamp ASC
-                    """, (p_id, start - 300, (end or start) + 600))
-                    for c_row in cursor.fetchall():
-                        commits.append({
-                            "hash": c_row[0],
-                            "timestamp": c_row[1],
-                            "message": c_row[2],
-                            "cleaned_message": c_row[3]
-                        })
-                        
-                sessions.append(Session(
-                    id=s_id,
-                    start_time=start,
-                    end_time=end,
-                    duration_seconds=duration,
-                    project_id=p_id,
-                    commands=commands,
-                    commits=commits,
-                    ai_summary=ai_sum,
-                    is_legacy=is_session_legacy,
-                    tags=tags_str
-                ))
+            sessions = self._build_sessions(cursor, session_rows)
         finally:
             conn.close()
         return sessions
@@ -1275,8 +1131,8 @@ class Database:
                 LEFT JOIN projects p ON s.project_id = p.id
                 LEFT JOIN commands c ON s.id = c.session_id
                 LEFT JOIN commits co ON s.project_id = co.project_id 
-                    AND co.timestamp >= s.start_time - 300 
-                    AND co.timestamp <= s.end_time + 600
+                AND co.timestamp >= s.start_time - 300 
+                AND co.timestamp <= COALESCE(s.end_time, s.start_time) + 600
                 WHERE (
                     p.name LIKE ?
                     OR c.command LIKE ?
@@ -1549,7 +1405,7 @@ class Database:
                     OR (f.type = 'command' AND CAST(f.ref_id AS INTEGER) = s.id)
                     OR (f.type = 'commit' AND s.project_id = CAST(f.project_id AS INTEGER) 
                         AND CAST(f.timestamp AS INTEGER) >= s.start_time - 300 
-                        AND CAST(f.timestamp AS INTEGER) <= s.end_time + 600)
+                        AND CAST(f.timestamp AS INTEGER) <= COALESCE(s.end_time, s.start_time) + 600)
                 )
                 WHERE (f.rank IS NOT NULL OR p.name LIKE ?)
             """

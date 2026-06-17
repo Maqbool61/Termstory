@@ -12,10 +12,15 @@ import sys
 
 def _handle_exception(exc_type, exc, tb):
     """Friendly global exception handler to avoid raw tracebacks."""
+    import traceback
     console = Console(stderr=True)
     console.print("[bold red]An unexpected error occurred. Please try again.[/bold red]")
-    # Optionally log tb to a file for developers.
-    # For now we suppress the traceback.
+    try:
+        with open(os.path.expanduser("~/.termstory.error.log"), "a") as f:
+            f.write(f"\n--- {datetime.now()} ---\n")
+            traceback.print_exception(exc_type, exc, tb, file=f)
+    except Exception:
+        pass
 
 sys.excepthook = _handle_exception
 
@@ -76,10 +81,12 @@ def calculate_streak(sessions: List[Session]) -> int:
     """Calculate consecutive active work days ending today or on the last active day."""
     if not sessions:
         return 0
+    today = get_current_time().date()
     active_dates = {
         datetime.fromtimestamp(s.start_time).date()
         for s in sessions
     }
+    active_dates = {d for d in active_dates if d <= today}
     if not active_dates:
         return 0
     
@@ -88,7 +95,6 @@ def calculate_streak(sessions: List[Session]) -> int:
     current_date = sorted_dates[0]
     
     # Allow a gap of at most 1 day (e.g. if today is inactive but yesterday was active, streak is still active)
-    today = get_current_time().date()
     if (today - current_date).days > 1:
         return 0
         
@@ -276,17 +282,13 @@ def strip_ansi(text: str) -> str:
 
 def deduplicate_sessions(sessions: List[Session]) -> List[Session]:
     """Group sessions by start_time and project_id, keeping only the one with the largest end_time."""
-    grouped = defaultdict(list)
+    grouped = {}
     for s in sessions:
         key = (s.start_time, s.project_id)
-        grouped[key].append(s)
-        
-    deduped = []
-    for key, group in grouped.items():
-        best_session = max(group, key=lambda s: s.end_time)
-        deduped.append(best_session)
-        
-    return sorted(deduped, key=lambda s: s.start_time)
+        if key not in grouped or s.end_time > grouped[key].end_time:
+            grouped[key] = s
+            
+    return sorted(grouped.values(), key=lambda s: s.start_time)
 
 
 def get_session_memory_str(session: Session) -> str:
@@ -768,7 +770,7 @@ class NavigationTree(Tree):
         """Find the leaf node representing session_id and update its label dynamically."""
         def traverse(node):
             if node.data and node.data.get("type") == "session" and node.data.get("session_id") == session_id:
-                label_str = str(node.label)
+                label_str = node.label.markup if hasattr(node.label, "markup") else str(node.label)
                 time_match = re.search(r'(\[dim\].*?\[/\])', label_str)
                 time_part = time_match.group(1) if time_match else ""
                 node.label = f"✨ {escape(new_summary)} {time_part}"
@@ -2965,7 +2967,7 @@ class TermStoryWorkspace(App):
             if hasattr(node, 'text_selection') and node.text_selection is not None:
                 sel = node.get_selection(node.text_selection)
                 if sel:
-                    self.copy_to_clipboard(sel[0])
+                    self.copy_to_clipboard(str(sel))
                     self.notify("Copied selection to clipboard!")
                     node.add_class("copied-flash")
                     def remove_flash(n=node):

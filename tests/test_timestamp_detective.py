@@ -276,7 +276,7 @@ class TestDetectInlineDate(unittest.TestCase):
         self.assertIn("2024-01-15T10:30:00", label)
         import datetime
         dt = datetime.datetime.strptime("2024-01-15T10:30:00", "%Y-%m-%dT%H:%M:%S")
-        dt = dt.replace(tzinfo=datetime.timezone.utc).astimezone()
+        dt = dt.astimezone()
         self.assertEqual(ts, int(dt.timestamp()))
 
     def test_git_commit_amend_date_flag_git_format(self):

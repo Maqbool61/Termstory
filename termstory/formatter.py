@@ -79,7 +79,7 @@ def extract_files_from_commands(commands: List[Command]) -> Dict[str, int]:
             files = [t for t in tokens[1:] if not t.startswith('-')]
             for f in files:
                 base = os.path.basename(f)
-                if base:
+                if base and base not in {'.', '..'}:
                     file_counts[base] += 1
     return dict(file_counts)
 
@@ -474,7 +474,8 @@ def format_projects_list(projects: List[Project]) -> str:
     table.add_column("Active Range", style="dim")
     
     display_names = disambiguate_project_names(projects)
-    for idx, p in enumerate(projects, 1):
+    sorted_projects = sorted(projects, key=lambda p: p.last_seen, reverse=True)
+    for idx, p in enumerate(sorted_projects, 1):
         name = display_names.get(p.id, p.name)
         first_dt = datetime.fromtimestamp(p.first_seen)
         last_dt = datetime.fromtimestamp(p.last_seen)
@@ -636,6 +637,11 @@ def split_command_chain(cmd_str: str) -> List[str]:
                 current = []
                 i += 2
                 continue
+            elif char == '|' and i + 1 < n and cmd_str[i+1] == '|':
+                parts.append("".join(current).strip())
+                current = []
+                i += 2
+                continue
             else:
                 current.append(char)
         else:
@@ -660,10 +666,10 @@ def clean_command_to_memory(cmd_str: str) -> str:
         
     # 2. Humanize common git commands
     if cmd_str.strip().startswith("git "):
-        checkout_b = re.search(r'checkout\s+-b\s+(\S+)', cmd_str)
+        checkout_b = re.search(r'(?:checkout\s+-b|switch\s+-c)\s+(\S+)', cmd_str)
         if checkout_b:
             return f"Create branch {checkout_b.group(1)}"
-        checkout = re.search(r'checkout\s+(\S+)', cmd_str)
+        checkout = re.search(r'(?:checkout|switch)\s+(\S+)', cmd_str)
         if checkout:
             return f"Switch to branch {checkout.group(1)}"
         if "push" in cmd_str:
@@ -746,9 +752,9 @@ def format_search_results(query: str, results: List[Dict], detailed: bool = Fals
             if not proj_name or proj_name == "General / No Project":
                 proj_name = "Other"
             
-            project_durations[proj_name] += r["duration_seconds"]
             memory = _get_session_memory(r)
             if memory:
+                project_durations[proj_name] += r["duration_seconds"]
                 project_memories[proj_name].append(memory)
 
         # Step 2: Collapse to one entry per day per project

@@ -287,14 +287,14 @@ class TimestampDetective:
         """
         patterns = [
             # Double-quoted: git commit [-flags] -m "msg"
-            r'git\s+commit\s+[^\n]*?-[a-zA-Z]*m\s+"([^"]+)"',
+            r'git\s+commit\s+[^\n]*?-[a-zA-Z]*m[=\s]*"([^"]+)"',
             # Single-quoted: git commit [-flags] -m 'msg'
-            r"git\s+commit\s+[^\n]*?-[a-zA-Z]*m\s+'([^']+)'",
+            r"git\s+commit\s+[^\n]*?-[a-zA-Z]*m[=\s]*'([^']+)'",
             # Long flag: --message "msg"
-            r'git\s+commit\s+.*?--message\s+"([^"]+)"',
-            r"git\s+commit\s+.*?--message\s+'([^']+)'",
+            r'git\s+commit\s+.*?--message[=\s]+"([^"]+)"',
+            r"git\s+commit\s+.*?--message[=\s]+'([^']+)'",
             # Unquoted single word (rare but valid)
-            r"git\s+commit\s+[^\n]*?-[a-zA-Z]*m\s+([^\s'\"]\S*)",
+            r"git\s+commit\s+[^\n]*?-[a-zA-Z]*m[=\s]+([^\s'\"]\S*)",
         ]
         for pat in patterns:
             m = re.search(pat, command)
@@ -374,7 +374,7 @@ class TimestampDetective:
                     current_cwd = new_cwd
 
                 # ── pushd ──────────────────────────────────────────────────────
-                elif cmd.startswith("pushd ") or cmd.startswith("pushd\t"):
+                elif cmd == "pushd" or cmd.startswith("pushd ") or cmd.startswith("pushd\t"):
                     import shlex
                     try:
                         tokens = shlex.split(cmd)
@@ -392,9 +392,12 @@ class TimestampDetective:
                             current_cwd = os.path.normpath(
                                 os.path.join(current_cwd, os.path.expanduser(target))
                             )
+                    elif cwd_stack:
+                        # pushd with no args swaps the top of the stack and current_cwd
+                        cwd_stack[-1], current_cwd = current_cwd, cwd_stack[-1]
 
                 # ── popd ───────────────────────────────────────────────────────
-                elif cmd == "popd" and cwd_stack:
+                elif (cmd == "popd" or cmd.startswith("popd ") or cmd.startswith("popd\t")) and cwd_stack:
                     current_cwd = cwd_stack.pop()
 
             cwd_map[idx] = current_cwd
@@ -467,6 +470,10 @@ class TimestampDetective:
                         best_ts = ts
                         best_hash = commit["hash"]
                         best_source = f"git log: {repo_name}@{commit['hash'][:7]}"
+                        if ratio == 1.0:
+                            break
+            if best_ratio == 1.0:
+                break
 
         if best_ts is not None:
             if not hasattr(self, '_used_commit_hashes'):
@@ -479,9 +486,11 @@ class TimestampDetective:
 
     def _parse_date_string(self, date_str: str) -> Optional[int]:
         from datetime import datetime, timezone
+        if date_str.endswith("Z"):
+            date_str = date_str[:-1] + "+0000"
+            
         formats = [
             "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%dT%H:%M:%SZ",
             "%Y-%m-%dT%H:%M:%S%z",
             "%Y-%m-%d",
             "%Y_%m_%d",
@@ -492,8 +501,9 @@ class TimestampDetective:
             try:
                 dt = datetime.strptime(date_str, fmt)
                 if dt.tzinfo is None:
-                    # Assume local time if no tz provided
-                    dt = dt.replace(tzinfo=timezone.utc).astimezone()
+                    # Assume local time if no tz provided.
+                    # dt.astimezone() converts naive dt as local time correctly.
+                    dt = dt.astimezone()
                 ts = int(dt.timestamp())
                 if self._is_valid_timestamp(ts):
                     return ts
@@ -852,7 +862,7 @@ class TimestampDetective:
                 return None
 
             # Normalise timezone: strip sub-second precision and ensure +00:00 form
-            created_str = re.sub(r'\.\d+Z$', 'Z', created_str)
+            created_str = re.sub(r'\.\d+', '', created_str)
             created_str = created_str.replace("Z", "+00:00")
             dt = datetime.fromisoformat(created_str)
             ts = int(dt.timestamp())
