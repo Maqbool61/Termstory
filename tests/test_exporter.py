@@ -182,7 +182,7 @@ def test_cli_export_command(tmp_path, monkeypatch):
     s = Session(id=1, start_time=2000, end_time=2000, duration_seconds=100, project_id=1, commands=[cmd])
     db.save_data([p], [s], [cmd])
     
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     
     # Test JSON stdout export
     result = runner.invoke(app, ["export", "--format", "json"])
