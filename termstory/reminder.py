@@ -396,19 +396,39 @@ def start_sleep_daemon(db_path: str):
 def run_sleep_daemon(db_path: str):
     """Run a daemon loop checking for idle periods and consolidating contexts."""
     import sys
+    import signal
     from termstory.database import Database
     
     pid_file = os.path.join(get_app_dir("data"), "sleep_daemon.pid")
-    try:
-        with open(pid_file, "w") as f:
-            f.write(str(os.getpid()))
-    except Exception:
-        pass
-        
-    db = Database(db_path)
-    while True:
+    
+    def cleanup_pid(signum, frame):
         try:
-            consolidate_sleep_contexts(db, force=False)
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
         except Exception:
             pass
-        time.sleep(300)
+        sys.exit(0)
+        
+    signal.signal(signal.SIGTERM, cleanup_pid)
+    signal.signal(signal.SIGINT, cleanup_pid)
+
+    try:
+        try:
+            with open(pid_file, "w") as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            pass
+            
+        db = Database(db_path)
+        while True:
+            try:
+                consolidate_sleep_contexts(db, force=False)
+            except Exception:
+                pass
+            time.sleep(300)
+    finally:
+        try:
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+        except Exception:
+            pass

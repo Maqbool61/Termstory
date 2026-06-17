@@ -501,11 +501,29 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
             prev_project.total_time += session.duration_seconds
             continue
         
-        # Follow: immediately after a known session, within threshold
-        if prev_project_id is not None and prev_gap < PROPAGATION_GAP_THRESHOLD:
+        # Proximity assignments:
+        is_prev_valid = prev_project_id is not None and prev_gap < PROPAGATION_GAP_THRESHOLD
+        is_next_valid = next_project_id is not None and next_gap < PROPAGATION_GAP_THRESHOLD
+
+        if is_prev_valid and is_next_valid:
+            if next_gap < prev_gap:
+                _assign_project_to_session(session, next_project, projects_dict)
+                next_project.session_count += 1
+                next_project.total_time += session.duration_seconds
+            else:
+                _assign_project_to_session(session, prev_project, projects_dict)
+                prev_project.session_count += 1
+                prev_project.total_time += session.duration_seconds
+            continue
+        elif is_prev_valid:
             _assign_project_to_session(session, prev_project, projects_dict)
             prev_project.session_count += 1
             prev_project.total_time += session.duration_seconds
+            continue
+        elif is_next_valid:
+            _assign_project_to_session(session, next_project, projects_dict)
+            next_project.session_count += 1
+            next_project.total_time += session.duration_seconds
             continue
     
     return list(projects_dict.values())
