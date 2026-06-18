@@ -23,6 +23,8 @@ def _aggregate_sessions_by_day(sessions: List[Session]) -> Dict[str, int]:
     """
     daily: Dict[str, int] = {}
     for s in sessions:
+        if s.is_legacy:
+            continue
         day = datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d")
         daily.setdefault(day, 0)
         dur = s.duration_seconds or 0
@@ -50,6 +52,8 @@ def render_timeline(db: Database, days: int = 30) -> str:
     total active time per day and prints a simple bar graph. The most recent
     day appears at the bottom (chronological order).
     """
+    if days <= 0:
+        raise ValueError("days must be greater than 0")
     now = datetime.now()
     start_ts = int((now - timedelta(days=days)).timestamp())
     # Fetch sessions in range

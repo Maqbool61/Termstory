@@ -4,7 +4,9 @@ import sys
 def modify_config_yaml(file_path, enable=True):
     if not os.path.exists(file_path):
         if enable:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            dirname = os.path.dirname(file_path)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write("plugins:\n  enabled:\n    - observability/nemo_relay\n")
             return True
@@ -16,6 +18,7 @@ def modify_config_yaml(file_path, enable=True):
     plugins_idx = -1
     enabled_idx = -1
     item_idx = -1
+    list_indent = -1
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -46,9 +49,14 @@ def modify_config_yaml(file_path, enable=True):
                 indent = len(line) - len(line.lstrip())
                 if indent <= enabled_indent:
                     break
-                if stripped == '- observability/nemo_relay':
-                    item_idx = i
-                    break
+                if stripped.startswith('- '):
+                    if list_indent == -1:
+                        list_indent = indent
+                    if stripped == '- observability/nemo_relay':
+                        item_idx = i
+                        break
+            if list_indent == -1:
+                list_indent = enabled_indent + 2
 
     if enable:
         if item_idx != -1:
@@ -59,9 +67,12 @@ def modify_config_yaml(file_path, enable=True):
                 lines.append('\n')
             lines.append("plugins:\n  enabled:\n    - observability/nemo_relay\n")
         elif enabled_idx == -1:
-            lines.insert(plugins_idx + 1, "  enabled:\n    - observability/nemo_relay\n")
+            plugins_indent = len(lines[plugins_idx]) - len(lines[plugins_idx].lstrip())
+            indent_str = " " * (plugins_indent + 2)
+            lines.insert(plugins_idx + 1, f"{indent_str}enabled:\n{indent_str}  - observability/nemo_relay\n")
         else:
-            lines.insert(enabled_idx + 1, "    - observability/nemo_relay\n")
+            indent_str = " " * list_indent
+            lines.insert(enabled_idx + 1, f"{indent_str}- observability/nemo_relay\n")
 
         with open(file_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
@@ -116,7 +127,9 @@ def modify_config_yaml(file_path, enable=True):
 def modify_env_file(file_path, enable=True):
     if not os.path.exists(file_path):
         if enable:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            dirname = os.path.dirname(file_path)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write("HERMES_NEMO_RELAY_ATOF_ENABLED=true\nHERMES_NEMO_RELAY_ATIF_ENABLED=true\n")
             return True

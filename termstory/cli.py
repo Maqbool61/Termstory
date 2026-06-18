@@ -406,7 +406,7 @@ def show_tags(
     if rebuild:
         console.print("Rebuilding tags for all sessions...")
         from termstory.tags import auto_tag_all_sessions
-        auto_tag_all_sessions(db)
+        auto_tag_all_sessions(db, force=True)
         console.print("[bold green]✓ Tags successfully rebuilt![/bold green]")
         if not tag:
             # If no tag is given, we will show the updated tag summary

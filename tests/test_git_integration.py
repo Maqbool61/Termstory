@@ -9,6 +9,12 @@ def test_clean_commit_message():
     assert clean_commit_message("chore: update readme") == "Update readme"
     assert clean_commit_message("docs(api): document everything") == "Document everything"
     
+    # Test breaking changes and revert conventional commits
+    assert clean_commit_message("feat(ui)!: break layout") == "Break layout"
+    assert clean_commit_message("feat!: breaking change without scope") == "Breaking change without scope"
+    assert clean_commit_message("revert: undo previous change") == "Undo previous change"
+    assert clean_commit_message("revert(api)!: undo breaking change") == "Undo breaking change"
+
     # Test JIRA / Issue code stripping
     assert clean_commit_message("[PROJ-123] Refactor CI pipeline") == "Refactor CI pipeline"
     assert clean_commit_message("ENG-456: hello world") == "Hello world"
@@ -17,9 +23,11 @@ def test_clean_commit_message():
     assert clean_commit_message("Refactor CI pipeline :rocket:") == "Refactor CI pipeline"
     assert clean_commit_message("🚧 fix: remove debug logs") == "Remove debug logs"
     
-    # Test empty or none values
+    # Test empty, none, or non-string values
     assert clean_commit_message("") == ""
     assert clean_commit_message(None) == ""
+    assert clean_commit_message(123) == ""
+    assert clean_commit_message([]) == ""
 
 def test_git_operations_on_temp_repo(tmp_path):
     # Verify non-repo path returns False

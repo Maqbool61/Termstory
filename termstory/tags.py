@@ -102,35 +102,66 @@ def compute_tags_from_text(commands: List[str], commits: List[Dict]) -> List[str
     return [t for t in ordered_tags if t in matched_tags]
 
 
-def auto_tag_all_sessions(db) -> None:
-    """Read all sessions, evaluate their commands and commits to compute tags, and save back to the DB in bulk."""
+def auto_tag_all_sessions(db, force: bool = False) -> None:
+    """Read sessions, evaluate their commands and commits to compute tags, and save back to the DB in bulk."""
     conn = db.get_connection()
     try:
         cursor = conn.cursor()
         
-        # 1. Fetch all sessions
-        cursor.execute("SELECT id, start_time, end_time, project_id FROM sessions")
+        # 1. Fetch sessions
+        if force:
+            cursor.execute("SELECT id, start_time, end_time, project_id FROM sessions")
+        else:
+            cursor.execute("SELECT id, start_time, end_time, project_id FROM sessions WHERE tags IS NULL")
+            
         sessions_data = cursor.fetchall()
         if not sessions_data:
             return
 
-        # 2. Fetch all commands grouped by session_id
-        cursor.execute("SELECT session_id, command FROM commands WHERE session_id IS NOT NULL")
+        session_ids = [row[0] for row in sessions_data]
+        project_ids = list({row[3] for row in sessions_data if row[3] is not None})
+
         commands_by_session = {}
-        for s_id, cmd in cursor.fetchall():
-            if s_id not in commands_by_session:
-                commands_by_session[s_id] = []
-            commands_by_session[s_id].append(cmd)
-
-        # 3. Fetch all commits grouped by project_id
-        cursor.execute("SELECT project_id, timestamp, message, cleaned_message FROM commits WHERE project_id IS NOT NULL")
         commits_by_project = {}
-        for p_id, ts, msg, cl_msg in cursor.fetchall():
-            if p_id not in commits_by_project:
-                commits_by_project[p_id] = []
-            commits_by_project[p_id].append({"timestamp": ts, "message": msg, "cleaned_message": cl_msg})
 
-        # 4. For each session, gather its commands and matching commits, compute tags, and update
+        # 2. Fetch commands and commits, querying selectively for performance if not forcing all
+        if len(session_ids) > 500 or force:
+            # Fetch all commands
+            cursor.execute("SELECT session_id, command FROM commands WHERE session_id IS NOT NULL")
+            for s_id, cmd in cursor.fetchall():
+                if s_id not in commands_by_session:
+                    commands_by_session[s_id] = []
+                commands_by_session[s_id].append(cmd)
+
+            # Fetch all commits
+            cursor.execute("SELECT project_id, timestamp, message, cleaned_message FROM commits WHERE project_id IS NOT NULL")
+            for p_id, ts, msg, cl_msg in cursor.fetchall():
+                if p_id not in commits_by_project:
+                    commits_by_project[p_id] = []
+                commits_by_project[p_id].append({"timestamp": ts, "message": msg, "cleaned_message": cl_msg})
+        else:
+            # Fetch commands for relevant sessions only
+            for i in range(0, len(session_ids), 500):
+                chunk = session_ids[i:i+500]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor.execute(f"SELECT session_id, command FROM commands WHERE session_id IN ({placeholders})", chunk)
+                for s_id, cmd in cursor.fetchall():
+                    if s_id not in commands_by_session:
+                        commands_by_session[s_id] = []
+                    commands_by_session[s_id].append(cmd)
+
+            # Fetch commits for relevant projects only
+            if project_ids:
+                for i in range(0, len(project_ids), 500):
+                    chunk = project_ids[i:i+500]
+                    placeholders = ",".join("?" for _ in chunk)
+                    cursor.execute(f"SELECT project_id, timestamp, message, cleaned_message FROM commits WHERE project_id IN ({placeholders})", chunk)
+                    for p_id, ts, msg, cl_msg in cursor.fetchall():
+                        if p_id not in commits_by_project:
+                            commits_by_project[p_id] = []
+                        commits_by_project[p_id].append({"timestamp": ts, "message": msg, "cleaned_message": cl_msg})
+
+        # 3. For each session, gather its commands and matching commits, compute tags, and update
         updates = []
         for s_id, start_time, end_time, p_id in sessions_data:
             cmds = commands_by_session.get(s_id, [])
@@ -139,16 +170,16 @@ def auto_tag_all_sessions(db) -> None:
                 project_commits = commits_by_project.get(p_id, [])
                 # Buffer: 5m pre, 10m post (same as database.py)
                 start_buf = start_time - 300
-                end_buf = end_time + 600
+                end_buf = (end_time if end_time is not None else start_time) + 600
                 for commit in project_commits:
                     if start_buf <= commit["timestamp"] <= end_buf:
                         matching_commits.append(commit)
 
             tags = compute_tags_from_text(cmds, matching_commits)
-            tags_str = ",".join(tags) if tags else None
+            tags_str = ",".join(tags) if tags else ""
             updates.append((tags_str, s_id))
 
-        # 5. Bulk update tags
+        # 4. Bulk update tags
         if updates:
             cursor.execute("BEGIN IMMEDIATE;")
             cursor.executemany("""

@@ -33,7 +33,9 @@ def get_history_files() -> List[str]:
     env_history = os.environ.get("HISTORY_FILES")
     if env_history:
         history_files = []
-        separator = "," if "," in env_history else ":"
+        separator = ";" if os.name == "nt" else ":"
+        if "," in env_history:
+            separator = ","
         parts = env_history.split(separator)
         for part in parts:
             part = part.strip()
@@ -48,9 +50,9 @@ def get_history_files() -> List[str]:
     # 1. Check HISTFILE env variable first
     histfile = os.environ.get("HISTFILE")
     if histfile:
-        histfile = os.path.expanduser(histfile)
-        if os.path.exists(histfile) and histfile not in history_files:
-            history_files.append(histfile)
+        expanded = os.path.realpath(os.path.abspath(os.path.expanduser(histfile)))
+        if os.path.exists(expanded) and expanded not in history_files:
+            history_files.append(expanded)
             
     # 2. Check other common known paths
     candidate_paths = [
@@ -63,7 +65,7 @@ def get_history_files() -> List[str]:
         "~/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt",
     ]
     for path in candidate_paths:
-        expanded = os.path.expanduser(path)
+        expanded = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
         if os.path.exists(expanded) and expanded not in history_files:
             history_files.append(expanded)
         
@@ -97,12 +99,12 @@ def translate_legacy_key(config: dict, key: str) -> str:
     if key == "ai_provider":
         return "active_provider"
     if key == "model_name":
-        provider = config.get("active_provider", "groq")
+        provider = config.get("active_provider") or "groq"
         if provider == "disabled":
             provider = "groq"
         return f"providers.{provider}.model_name"
     if key == "api_base_url":
-        provider = config.get("active_provider", "groq")
+        provider = config.get("active_provider") or "groq"
         if provider == "disabled":
             provider = "groq"
         return f"providers.{provider}.api_base_url"
@@ -169,6 +171,8 @@ def load_config() -> dict:
                 config = json.load(f)
         except Exception:
             config = {}
+    if not isinstance(config, dict):
+        config = {}
             
     # 2. Perform legacy key migrations
     migrated = False
@@ -185,7 +189,7 @@ def load_config() -> dict:
         
     if "api_base_url" in config:
         val = config.pop("api_base_url")
-        prov = config.get("active_provider", "groq")
+        prov = config.get("active_provider") or "groq"
         if prov == "disabled":
             prov = "groq"
         if "providers" not in config:
@@ -197,7 +201,7 @@ def load_config() -> dict:
         
     if "model_name" in config:
         val = config.pop("model_name")
-        prov = config.get("active_provider", "groq")
+        prov = config.get("active_provider") or "groq"
         if prov == "disabled":
             prov = "groq"
         if "providers" not in config:

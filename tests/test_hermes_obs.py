@@ -136,3 +136,32 @@ def test_cli_obs_enable_disable(tmp_path, monkeypatch):
     
     assert "HERMES_NEMO_RELAY" not in env_file.read_text()
     assert "observability/nemo_relay" not in config_file.read_text()
+
+
+def test_modify_config_yaml_relative_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config_file = "config.yaml"
+    assert modify_config_yaml(config_file, enable=True) is True
+    assert os.path.exists(config_file)
+    assert "observability/nemo_relay" in open(config_file).read()
+    
+    assert modify_config_yaml(config_file, enable=False) is True
+    assert open(config_file).read() == ""
+
+
+def test_modify_config_yaml_dynamic_indentation(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    
+    # 2 spaces indentation under enabled: (spotify has 4 spaces indent)
+    orig_content = "plugins:\n  enabled:\n    - spotify\n"
+    config_file.write_text(orig_content)
+    assert modify_config_yaml(str(config_file), enable=True) is True
+    content = config_file.read_text()
+    assert "    - observability/nemo_relay\n" in content
+    
+    # 4 spaces indentation under enabled: (spotify has 8 spaces indent)
+    orig_content = "plugins:\n    enabled:\n        - spotify\n"
+    config_file.write_text(orig_content)
+    assert modify_config_yaml(str(config_file), enable=True) is True
+    content = config_file.read_text()
+    assert "        - observability/nemo_relay\n" in content

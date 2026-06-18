@@ -1,7 +1,8 @@
 from termstory.models import Command, Session, Project
 from termstory.project import (
     detect_projects, extract_cd_path, humanize_project_name, 
-    disambiguate_project_names, _is_project_indicative_command, _extract_file_args
+    disambiguate_project_names, _is_project_indicative_command, _extract_file_args,
+    split_chained_commands
 )
 
 def test_extract_cd_path():
@@ -339,3 +340,61 @@ def test_neighbor_propagation_proximity_comparison():
     # Since s2 is closer to s3 (400s gap) than s1 (900s gap), it should be assigned to s3's project
     assert s2.project_id is not None
     assert s2.project_id == s3.project_id
+
+def test_split_chained_commands():
+    assert split_chained_commands("echo 'hello && world'") == ["echo 'hello && world'"]
+    assert split_chained_commands("echo hello && ls") == ["echo hello", "ls"]
+    assert split_chained_commands("echo hello \\&\\& world; ls") == ["echo hello \\&\\& world", "ls"]
+    assert split_chained_commands("echo \"hello \\\" world\" && ls") == ["echo \"hello \\\" world\"", "ls"]
+
+def test_cd_minus(monkeypatch):
+    import os
+    original_listdir = os.listdir
+    def mock_listdir(path):
+        if "project-alpha" in path or "project-beta" in path:
+            return [".git"]
+        return original_listdir(path)
+    monkeypatch.setattr(os, "listdir", mock_listdir)
+
+    s1 = Session(id=1, start_time=1000, end_time=1200, duration_seconds=200, project_id=None,
+                 commands=[
+                     Command(timestamp=1000, command="cd ~/projects/project-alpha"),
+                     Command(timestamp=1050, command="git status"),
+                     Command(timestamp=1100, command="cd ~/projects/project-beta"),
+                     Command(timestamp=1150, command="cd -"),
+                     Command(timestamp=1200, command="git log")
+                 ])
+                 
+    projects = detect_projects([s1])
+    alpha_proj = next(p for p in projects if "alpha" in p.path.lower())
+    assert s1.project_id == alpha_proj.id
+
+def test_listdir_timeout_caching(monkeypatch):
+    import time
+    import pytest
+    from termstory.project import _listdir_with_timeout, _timed_out_paths
+    
+    _timed_out_paths.clear()
+    
+    def mock_listdir_hang(path):
+        time.sleep(2.0)
+        return []
+        
+    import os
+    monkeypatch.setattr(os, "listdir", mock_listdir_hang)
+    
+    # First call should time out after 0.1s (we'll use timeout=0.1)
+    t0 = time.time()
+    with pytest.raises(TimeoutError):
+        _listdir_with_timeout("/some/hung/mount", timeout=0.1)
+    t1 = time.time()
+    assert 0.08 <= (t1 - t0) <= 0.5  # timed out correctly
+    
+    # Second call should time out immediately from cache
+    t2 = time.time()
+    with pytest.raises(TimeoutError) as exc_info:
+        _listdir_with_timeout("/some/hung/mount", timeout=0.1)
+    t3 = time.time()
+    
+    assert (t3 - t2) < 0.05  # should be virtually instant
+    assert "cached" in str(exc_info.value)

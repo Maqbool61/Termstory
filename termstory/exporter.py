@@ -182,7 +182,7 @@ def export_csv(
                 row = {
                     "session_id": s.id,
                     "session_start_time": datetime.fromtimestamp(s.start_time).isoformat(),
-                    "session_end_time": datetime.fromtimestamp(s.end_time).isoformat(),
+                    "session_end_time": datetime.fromtimestamp(s.end_time).isoformat() if s.end_time is not None else "",
                     "session_duration_seconds": s.duration_seconds,
                     "project_name": proj.name if proj else "Other",
                     "project_path": proj.path if proj else "",

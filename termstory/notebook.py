@@ -112,6 +112,7 @@ def generate_notebook(
                     for commit in s.commits:
                         short_hash = commit.get("hash", "")[:7]
                         msg = commit.get("cleaned_message") or commit.get("message") or ""
+                        msg = msg.split("\n")[0].strip()
                         lines.append(f"    - `{short_hash}`: {msg}")
 
                 # Commands

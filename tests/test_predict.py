@@ -484,3 +484,119 @@ class TestPredictorDaysFilter:
             assert "ProjectB" in projects_all
         finally:
             os.unlink(db_path)
+
+
+class TestPredictorOngoingSessionsAndTimezone:
+    def test_ongoing_session_no_crash(self):
+        """Ongoing sessions (where end_time is NULL) should not crash the predictor."""
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        db_path = tmp.name
+        tmp.close()
+
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT UNIQUE,
+                first_seen INTEGER,
+                last_seen INTEGER,
+                project_context TEXT,
+                created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )
+        """)
+        c.execute("""
+            CREATE TABLE sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_time INTEGER NOT NULL,
+                end_time INTEGER,
+                duration_seconds INTEGER,
+                project_id INTEGER,
+                ai_summary TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                command TEXT NOT NULL,
+                exit_code INTEGER DEFAULT 0,
+                session_id INTEGER,
+                project_id INTEGER,
+                recovery_source TEXT,
+                is_legacy BOOLEAN DEFAULT 0
+            )
+        """)
+        
+        c.execute("INSERT INTO projects (name, path, first_seen, last_seen) VALUES (?, ?, ?, ?)",
+                  ("OngoingProj", "/path/to/ongoing", 0, int(time.time())))
+        p_id = c.lastrowid
+        
+        now = datetime.now()
+        start_ts = int((now - timedelta(hours=14)).timestamp())
+        c.execute("INSERT INTO sessions (start_time, end_time, duration_seconds, project_id) VALUES (?, NULL, NULL, ?)",
+                  (start_ts, p_id))
+        s_id = c.lastrowid
+        
+        c.execute("INSERT INTO commands (timestamp, command, session_id, project_id, is_legacy) VALUES (?, ?, ?, ?, ?)",
+                  (start_ts, "python run.py", s_id, p_id, 0))
+                  
+        conn.commit()
+        conn.close()
+        
+        try:
+            p = Predictor(db_path)
+            res = p.predict(now=now)
+            assert len(res["top_projects"]) > 0
+            assert res["top_projects"][0]["project_name"] == "OngoingProj"
+        finally:
+            os.unlink(db_path)
+
+    def test_timezone_alignment(self):
+        """Timezone aware datetimes should align correctly with the predictor's logic."""
+        import zoneinfo
+        try:
+            tz_utc = zoneinfo.ZoneInfo("UTC")
+            tz_est = zoneinfo.ZoneInfo("America/New_York")
+        except Exception:
+            from datetime import timezone
+            tz_utc = timezone.utc
+            class EST(timezone):
+                def utcoffset(self, dt):
+                    return timedelta(hours=-5)
+                def tzname(self, dt):
+                    return "EST"
+                def dst(self, dt):
+                    return timedelta(0)
+            tz_est = EST()
+            
+        now_utc = datetime(2026, 6, 15, 14, 0, tzinfo=tz_utc)
+        ts = int(now_utc.timestamp())
+        
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        db_path = tmp.name
+        tmp.close()
+
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        c.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, path TEXT)")
+        c.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, start_time INTEGER, end_time INTEGER, duration_seconds INTEGER, project_id INTEGER)")
+        c.execute("CREATE TABLE commands (id INTEGER PRIMARY KEY, timestamp INTEGER, command TEXT, session_id INTEGER, project_id INTEGER, is_legacy INTEGER)")
+        
+        c.execute("INSERT INTO projects VALUES (1, 'TzProj', '/tz')")
+        c.execute("INSERT INTO sessions VALUES (1, ?, ?, 3600, 1)", (ts, ts + 3600))
+        c.execute("INSERT INTO commands VALUES (1, ?, 'python run.py', 1, 1, 0)", (ts,))
+        conn.commit()
+        conn.close()
+        
+        try:
+            p = Predictor(db_path)
+            res_utc = p.predict(now=now_utc)
+            assert "afternoon" in res_utc["time_context"]
+            
+            now_est = now_utc.astimezone(tz_est)
+            res_est = p.predict(now=now_est)
+            assert "morning" in res_est["time_context"]
+        finally:
+            os.unlink(db_path)

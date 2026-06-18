@@ -80,6 +80,15 @@ def test_database_commits_and_search(tmp_path, monkeypatch):
     results = db.search_sessions("supervision")
     assert len(results) == 1
     assert results[0]["session_id"] == 1
+    # 10. Test active session (end_time is None) doesn't crash search_sessions
+    cmd3 = Command(timestamp=now + 20000, command="python3 script.py", session_id=3, project_id=1)
+    s3 = Session(id=3, start_time=now + 20000, end_time=None, duration_seconds=0, project_id=1, commands=[cmd3])
+    db.save_data([], [s3], [cmd3])
+    
+    results = db.search_sessions("script.py")
+    assert len(results) == 1
+    assert results[0]["session_id"] == 3
+
 
 
 def test_advanced_search(tmp_path, monkeypatch):

@@ -5,16 +5,16 @@ from typing import List, Optional, Dict, Any, Union, Callable
 from termstory.models import Command
 from termstory.timestamp_detective import TimestampDetective
 
+try:
+    ANSI_ESCAPE_PATTERN = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+except re.error:
+    ANSI_ESCAPE_PATTERN = None
+
 def clean_command(cmd_str: str) -> Optional[str]:
     """Clean the command string: strip whitespace and join multiline commands with spaces"""
     # Strip ansi escape codes
-    try:
-        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    except re.error:
-        ansi_escape = None
-
-    if ansi_escape:
-        cleaned = ansi_escape.sub('', cmd_str)
+    if ANSI_ESCAPE_PATTERN:
+        cleaned = ANSI_ESCAPE_PATTERN.sub('', cmd_str)
     else:
         cleaned = cmd_str
     
@@ -191,8 +191,18 @@ def parse_zsh_history(
     # or recent activity, we enforce a strict 30-day buffer from file_mtime.
     BUFFER_30_DAYS = 30 * 86400
 
-    if timestamped_items:
-        oldest_ts = min(item["timestamp"] for item in timestamped_items)
+    now_temp = int(datetime.now().timestamp())
+    from termstory.config import load_config
+    max_history_age_temp = load_config().get("max_history_age", 5)
+    five_years_ago_temp = now_temp - (max_history_age_temp * 365 * 24 * 60 * 60)
+
+    valid_timestamps = [
+        item["timestamp"] for item in timestamped_items 
+        if item["timestamp"] is not None and item["timestamp"] >= five_years_ago_temp
+    ]
+
+    if valid_timestamps:
+        oldest_ts = min(valid_timestamps)
         # Push anchor back so the spread window has room behind the oldest real timestamp.
         natural_anchor = oldest_ts - legacy_window
         anchor_time = min(natural_anchor, file_mtime - BUFFER_30_DAYS - legacy_window)
@@ -466,6 +476,22 @@ def _assign_missing_timestamps_fallback(
     existing_lookup: Optional[Dict[str, List[int]]]
 ) -> List[Command]:
     commands_to_return = []
+    
+    # Pre-clean raw timestamps: discard any that are out of bounds
+    import time
+    now_clean = int(time.time())
+    from termstory.config import load_config
+    max_history_age_clean = load_config().get("max_history_age", 5)
+    five_years_ago_clean = now_clean - (max_history_age_clean * 365 * 24 * 60 * 60)
+    
+    cleaned_temp_commands = []
+    for t, cmd in temp_commands:
+        if t is not None:
+            if not (five_years_ago_clean <= t <= now_clean):
+                t = None
+        cleaned_temp_commands.append((t, cmd))
+    temp_commands = cleaned_temp_commands
+    
     has_any_timestamps = any(t is not None for t, _ in temp_commands)
     
     consumed = {}

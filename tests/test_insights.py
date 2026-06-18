@@ -291,5 +291,67 @@ def test_calculate_rage_quit_signatures():
     assert "No rage-quit events detected." in formatted_empty
 
 
+def test_insights_ongoing_sessions():
+    # Test that insights calculation functions don't crash when end_time or duration_seconds is None (active sessions)
+    s_active = Session(id=1, start_time=1748870400, end_time=None, duration_seconds=None, project_id=1, commands=[])
+    
+    p = Project(id=1, name="Project Alpha", path="~/alpha", first_seen=0, last_seen=0, session_count=0, total_time=0)
+    
+    # Check that calculate_time_distribution doesn't raise error
+    dist = calculate_time_distribution([s_active], [p])
+    assert dist == []
+    
+    # Check that calculate_time_of_day_distribution doesn't raise error
+    tod = calculate_time_of_day_distribution([s_active])
+    assert sum(tod.values()) == 0
+    
+    # Check that calculate_day_distribution doesn't raise error
+    day_dist = calculate_day_distribution([s_active])
+    assert sum(day_dist.values()) == 0
+    
+    # Check that calculate_focus_score doesn't raise error
+    score = calculate_focus_score([s_active])
+    assert score == 6.0
+
+
+def test_streak_future_date_clamp(monkeypatch):
+    # Test that calculate_streak ignores future dates
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-01 12:00:00")
+    from datetime import datetime
+    from termstory.insights import calculate_streak
+    
+    # Monday is 2026-06-01. Set a session in the future (Tuesday 2026-06-02)
+    ts_today = int(datetime(2026, 6, 1, 12, 0, 0).timestamp())
+    ts_future = int(datetime(2026, 6, 2, 12, 0, 0).timestamp())
+    
+    s_today = Session(id=1, start_time=ts_today, end_time=ts_today + 100, duration_seconds=100, project_id=1)
+    s_future = Session(id=2, start_time=ts_future, end_time=ts_future + 100, duration_seconds=100, project_id=1)
+    
+    # Streak should be 1, ignoring the future session
+    streak = calculate_streak([s_today, s_future])
+    assert streak == 1
+
+
+def test_detect_late_night_chaotic_sessions_invalid_timestamp(tmp_path):
+    from termstory.database import Database
+    from termstory.insights import detect_late_night_chaotic_sessions
+    
+    db_file = tmp_path / "test_corrupt_ts.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    # Insert session with invalid/corrupt negative start_time or extremely large start_time
+    conn = db.get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO sessions (start_time, end_time, duration_seconds, project_id) VALUES (?, ?, ?, ?)", (-999999999999, None, None, None))
+    finally:
+        conn.close()
+        
+    # Should not raise OSError or OverflowError, just skip it or handle gracefully
+    sessions = detect_late_night_chaotic_sessions(db)
+    assert len(sessions) == 0
+
+
 
 

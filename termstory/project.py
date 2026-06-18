@@ -96,8 +96,19 @@ def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
 
 import threading
 
+_timed_out_paths = {}  # path -> timestamp of last timeout
+_timeout_lock = threading.Lock()
+
 def _listdir_with_timeout(path: str, timeout: float = 0.5) -> List[str]:
     """Execute os.listdir in a daemon thread to enforce a timeout (e.g. on hung NFS mounts)"""
+    now = time.time()
+    with _timeout_lock:
+        if path in _timed_out_paths:
+            if now - _timed_out_paths[path] < 60:
+                raise TimeoutError(f"os.listdir recently timed out on path (cached): {path}")
+            else:
+                del _timed_out_paths[path]
+
     result = []
     exception_container = [None]
 
@@ -112,6 +123,8 @@ def _listdir_with_timeout(path: str, timeout: float = 0.5) -> List[str]:
     t.start()
     t.join(timeout)
     if t.is_alive():
+        with _timeout_lock:
+            _timed_out_paths[path] = time.time()
         raise TimeoutError(f"os.listdir timed out on path: {path}")
     if exception_container[0] is not None:
         raise exception_container[0]
@@ -295,11 +308,13 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
     # Persist cwd state across sessions to mirror terminal tab preservation
     cwd = os.path.expanduser("~")
     home = os.path.abspath(os.path.expanduser("~"))
+    old_cwd = home
     
     # ── Pass 1: cd-tracking (existing logic) ──────────────────────────
     last_session_end = None
     for session in sorted_sessions:
         if last_session_end is not None and session.start_time - last_session_end > 7200:
+            old_cwd = home
             cwd = home
         
         for cmd in session.commands:
@@ -314,7 +329,9 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
                         path = os.path.expandvars(path)
                         # Resolve path
                         resolved = None
-                        if os.path.isabs(path) or path.startswith("~"):
+                        if path == "-":
+                            resolved = old_cwd
+                        elif os.path.isabs(path) or path.startswith("~"):
                             resolved = os.path.abspath(os.path.expanduser(path))
                         else:
                             # Try relative to current simulated cwd
@@ -341,7 +358,9 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
                                         resolved = test_path
                                     
                         if resolved:
-                            cwd = resolved
+                            if resolved != cwd:
+                                old_cwd = cwd
+                                cwd = resolved
                         
         # The project path is the resolved cwd at the end of the session
         project_root = find_project_root(cwd)
@@ -538,6 +557,11 @@ def split_chained_commands(cmd_str: str) -> List[str]:
     
     while i < length:
         c = cmd_str[i]
+        if c == "\\" and i + 1 < length:
+            current.append(c)
+            current.append(cmd_str[i+1])
+            i += 2
+            continue
         if c == "'" and not in_double:
             in_single = not in_single
             current.append(c)

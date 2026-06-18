@@ -36,7 +36,7 @@ BLACKLIST_PATTERNS = [
     re.compile(r'\bgithub_pat_[a-zA-Z0-9_]+\b', re.IGNORECASE),
     re.compile(r'\bsk_live_[a-zA-Z0-9_]+\b', re.IGNORECASE),
     re.compile(r'\bnpm_[a-zA-Z0-9]{36}\b', re.IGNORECASE),
-    re.compile(r'\bsk-(?:proj-|ant-api03-)?[a-zA-Z0-9_-]{20,}\b', re.IGNORECASE)
+    re.compile(r'\bsk-(?:proj-|ant-api03-)?[a-zA-Z0-9]{20,}\b', re.IGNORECASE)
 ]
 
 # Hardcoded redaction patterns
@@ -51,6 +51,10 @@ HIGH_RISK_ENV_PATTERN = re.compile(
 
 PASSWORD_FLAG_PATTERN = re.compile(
     r'(--password=|\b--password\s+|\b--pass=|\b--pass\s+|--token=|--token\s+|--api-key=|--api-key\s+)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
+    re.IGNORECASE
+)
+MYSQL_PASSWORD_PATTERN = re.compile(
+    r'((?<!-)-p\s*)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
     re.IGNORECASE
 )
 
@@ -144,8 +148,7 @@ def redact_command(cmd: str) -> str:
     # 4. Password and Secret flags
     cmd = PASSWORD_FLAG_PATTERN.sub(r'\1[REDACTED]', cmd)
     if re.search(r'\b(mysql|mysqldump|mongo|influx)\b', cmd, re.IGNORECASE):
-        mysql_password_pattern = re.compile(r'((?<!-)-p\s*)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")', re.IGNORECASE)
-        cmd = mysql_password_pattern.sub(r'\1[REDACTED]', cmd)
+        cmd = MYSQL_PASSWORD_PATTERN.sub(r'\1[REDACTED]', cmd)
     
     # 5. IP Addresses
     cmd = IP_ADDRESS_PATTERN.sub('[REDACTED_IP]', cmd)

@@ -157,3 +157,19 @@ def test_run_sleep_daemon_cleanup_on_initialization_failure(tmp_path, monkeypatc
             
     # The PID file should have been cleaned up and not exist on disk
     assert not pid_file.exists()
+
+
+def test_add_reminder_explicit_days_prefix_suffix_stripping(tmp_path, monkeypatch):
+    reminders_file = tmp_path / "reminders.json"
+    monkeypatch.setattr("termstory.reminder.get_reminders_file_path", lambda: str(reminders_file))
+    
+    # Prefix and suffix stripping with explicit days
+    rem = add_reminder("remind me about code review in 2 days", days=5)
+    assert rem["about"] == "code review"
+    assert rem["days"] == 5
+    
+    rem2 = add_reminder("remind me to write tests", days=1)
+    assert rem2["about"] == "write tests"
+    
+    rem3 = add_reminder("deploy application in 3 days", days=10)
+    assert rem3["about"] == "deploy application"

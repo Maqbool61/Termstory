@@ -127,18 +127,32 @@ class Predictor:
             cursor.execute(query, params)
             session_rows = cursor.fetchall()
 
+            # Fetch all commands for non-legacy sessions in one go
+            cmd_query = "SELECT session_id, command, is_legacy FROM commands"
+            cmd_params = []
+            if cutoff_time is not None:
+                cmd_query = """
+                    SELECT c.session_id, c.command, c.is_legacy
+                    FROM commands c
+                    JOIN sessions s ON c.session_id = s.id
+                    WHERE s.start_time >= ?
+                    ORDER BY c.timestamp ASC
+                """
+                cmd_params.append(cutoff_time)
+            else:
+                cmd_query += " ORDER BY timestamp ASC"
+
+            cursor.execute(cmd_query, cmd_params)
+            commands_by_session = defaultdict(list)
+            for row in cursor.fetchall():
+                c_s_id, command, is_legacy = row
+                commands_by_session[c_s_id].append((command, is_legacy))
+
             sessions = []
             for row in session_rows:
                 s_id, start, end, dur, p_id, p_name, p_path = row
 
-                # Fetch commands for this session, filter out legacy
-                cursor.execute("""
-                    SELECT command, is_legacy
-                    FROM commands
-                    WHERE session_id = ?
-                    ORDER BY timestamp ASC
-                """, (s_id,))
-                cmd_rows = cursor.fetchall()
+                cmd_rows = commands_by_session.get(s_id, [])
 
                 # Skip session if ALL commands are legacy
                 if cmd_rows and all(bool(r[1]) for r in cmd_rows):
@@ -175,6 +189,7 @@ class Predictor:
         if not sessions:
             return {}
 
+        tz = now.tzinfo
         now_bucket = _hour_bucket(now.hour)
         now_day = _day_label(now.weekday())
         now_ts = now.timestamp()
@@ -192,7 +207,7 @@ class Predictor:
         # --- Time-of-day affinity ---
         project_bucket_count: Dict[Tuple[str, str], int] = defaultdict(int)
         for s in sessions:
-            dt = datetime.fromtimestamp(s["start"])
+            dt = datetime.fromtimestamp(s["start"], tz=tz)
             bucket = _hour_bucket(dt.hour)
             project_bucket_count[(s["project_name"], bucket)] += 1
 
@@ -206,7 +221,7 @@ class Predictor:
         # --- Day-of-week cadence ---
         project_day_count: Dict[Tuple[str, str], int] = defaultdict(int)
         for s in sessions:
-            dt = datetime.fromtimestamp(s["start"])
+            dt = datetime.fromtimestamp(s["start"], tz=tz)
             day = _day_label(dt.weekday())
             project_day_count[(s["project_name"], day)] += 1
 
@@ -220,12 +235,15 @@ class Predictor:
         cutoff_12h = now_ts - 12 * 3600
         cutoff_7d = now_ts - 7 * 24 * 3600
         for s in sessions:
+            if s["end"] is None:
+                continue
             # Session ended more than 12h ago but within 7 days
             if cutoff_7d <= s["end"] <= cutoff_12h:
                 # No subsequent session in the same project within 12h after this one
                 gap_end = s["end"] + 12 * 3600
                 has_followup = any(
                     t["project_name"] == s["project_name"]
+                    and t["start"] is not None
                     and s["end"] < t["start"] <= gap_end
                     for t in sessions
                 )
@@ -313,6 +331,7 @@ class Predictor:
         """
         if now is None:
             now = datetime.now()
+        tz = now.tzinfo
 
         cutoff_time = None
         if days is not None:
@@ -359,7 +378,7 @@ class Predictor:
 
             interrupted_at = None
             if interrupted and interrupted["project_name"] == proj_name:
-                dt = datetime.fromtimestamp(interrupted["end"])
+                dt = datetime.fromtimestamp(interrupted["end"], tz=tz)
                 interrupted_at = dt.strftime("%A %H:%M")
 
             top_projects.append({

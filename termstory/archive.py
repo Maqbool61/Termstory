@@ -98,11 +98,10 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
         # Ensure we only fetch unique project IDs that are NOT NULL
         proj_ids = set()
         if session_ids:
-            placeholders = ",".join("?" for _ in session_ids)
-            cursor.execute(f"SELECT DISTINCT project_id FROM main.sessions WHERE id IN ({placeholders}) AND project_id IS NOT NULL", session_ids)
+            cursor.execute("SELECT DISTINCT project_id FROM main.sessions WHERE start_time < ? AND project_id IS NOT NULL", (cutoff_timestamp,))
             proj_ids.update(r[0] for r in cursor.fetchall())
             
-            cursor.execute(f"SELECT DISTINCT project_id FROM main.commands WHERE session_id IN ({placeholders}) AND project_id IS NOT NULL", session_ids)
+            cursor.execute("SELECT DISTINCT project_id FROM main.commands WHERE session_id IN (SELECT id FROM main.sessions WHERE start_time < ?) AND project_id IS NOT NULL", (cutoff_timestamp,))
             proj_ids.update(r[0] for r in cursor.fetchall())
 
         cursor.execute("SELECT DISTINCT project_id FROM main.commits WHERE timestamp < ? AND project_id IS NOT NULL", (cutoff_timestamp,))
@@ -110,11 +109,15 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
 
         project_id_map = {}
         if proj_ids:
-            proj_placeholders = ",".join("?" for _ in proj_ids)
-            cursor.execute(f"SELECT id, name, path, first_seen, last_seen, created_at FROM main.projects WHERE id IN ({proj_placeholders})", list(proj_ids))
-            projects_to_archive = cursor.fetchall()
+            projects_to_archive = []
+            proj_ids_list = list(proj_ids)
+            for i in range(0, len(proj_ids_list), 900):
+                chunk = proj_ids_list[i:i+900]
+                proj_placeholders = ",".join("?" for _ in chunk)
+                cursor.execute(f"SELECT id, name, path, first_seen, last_seen, project_context, created_at FROM main.projects WHERE id IN ({proj_placeholders})", chunk)
+                projects_to_archive.extend(cursor.fetchall())
 
-            for p_id, p_name, p_path, p_fs, p_ls, p_ca in projects_to_archive:
+            for p_id, p_name, p_path, p_fs, p_ls, p_ctx, p_ca in projects_to_archive:
                 # Check if this project path already exists in archive
                 cursor.execute("SELECT id FROM archive.projects WHERE path = ?", (p_path,))
                 row = cursor.fetchone()
@@ -125,16 +128,16 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
                     cursor.execute("SELECT 1 FROM archive.projects WHERE id = ?", (p_id,))
                     if not cursor.fetchone():
                         cursor.execute("""
-                            INSERT INTO archive.projects (id, name, path, first_seen, last_seen, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (p_id, p_name, p_path, p_fs, p_ls, p_ca))
+                            INSERT INTO archive.projects (id, name, path, first_seen, last_seen, project_context, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (p_id, p_name, p_path, p_fs, p_ls, p_ctx, p_ca))
                         project_id_map[p_id] = p_id
                     else:
                         # ID is taken, let SQLite autoincrement
                         cursor.execute("""
-                            INSERT INTO archive.projects (name, path, first_seen, last_seen, created_at)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (p_name, p_path, p_fs, p_ls, p_ca))
+                            INSERT INTO archive.projects (name, path, first_seen, last_seen, project_context, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (p_name, p_path, p_fs, p_ls, p_ctx, p_ca))
                         project_id_map[p_id] = cursor.lastrowid
 
         # Determine FTS5 search index presence
@@ -246,13 +249,13 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
 
         # Commands (child rows)
         if session_ids:
-            cursor.execute(f"DELETE FROM main.commands WHERE session_id IN ({placeholders})", session_ids)
+            cursor.execute("DELETE FROM main.commands WHERE session_id IN (SELECT id FROM main.sessions WHERE start_time < ?)", (cutoff_timestamp,))
         # Delete any orphan commands older than cutoff
         cursor.execute("DELETE FROM main.commands WHERE session_id IS NULL AND timestamp < ?", (cutoff_timestamp,))
 
         # Sessions
         if session_ids:
-            cursor.execute(f"DELETE FROM main.sessions WHERE id IN ({placeholders})", session_ids)
+            cursor.execute("DELETE FROM main.sessions WHERE start_time < ?", (cutoff_timestamp,))
 
         # Commits
         if commit_hashes:

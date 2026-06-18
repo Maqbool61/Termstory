@@ -47,3 +47,37 @@ def test_cli_timeline_command(tmp_path, monkeypatch):
         assert d in result
     # Ensure non‑zero bars are present for days with sessions
     assert "█" in result
+
+
+def test_render_timeline_skips_legacy_sessions(tmp_path):
+    db_file = tmp_path / "test_timeline_legacy.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    now = datetime.now()
+    base_ts = int(now.timestamp())
+    
+    project = Project(id=1, name="DemoProject", path="~/demo", first_seen=base_ts, last_seen=base_ts, session_count=1, total_time=300)
+    session = Session(id=1, start_time=base_ts, end_time=base_ts + 100, duration_seconds=100, project_id=1, commands=[])
+    cmd = Command(timestamp=base_ts, command="echo legacy", session_id=1, project_id=1, is_legacy=True)
+    
+    db.save_data([project], [session], [cmd])
+    
+    from termstory.timeline import render_timeline
+    result = render_timeline(db, days=1)
+    
+    assert "█" not in result
+
+
+def test_render_timeline_invalid_days(tmp_path):
+    db_file = tmp_path / "test_timeline_invalid.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    from termstory.timeline import render_timeline
+    import pytest
+    with pytest.raises(ValueError, match="days must be greater than 0"):
+        render_timeline(db, days=0)
+        
+    with pytest.raises(ValueError, match="days must be greater than 0"):
+        render_timeline(db, days=-5)

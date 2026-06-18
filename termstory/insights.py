@@ -8,7 +8,7 @@ def calculate_time_distribution(sessions: List[Session], projects: List[Project]
     """Calculate the percentage of total hours and absolute time spent on each project.
     Returns: [(project_name, percentage, duration_seconds), ...] sorted by duration DESC
     """
-    total_time = sum(s.duration_seconds for s in sessions)
+    total_time = sum(s.duration_seconds or 0 for s in sessions)
     if total_time == 0:
         return []
         
@@ -17,7 +17,7 @@ def calculate_time_distribution(sessions: List[Session], projects: List[Project]
     
     for s in sessions:
         p_name = project_map.get(s.project_id, "General / No Project")
-        time_by_project[p_name] += s.duration_seconds
+        time_by_project[p_name] += s.duration_seconds or 0
         
     sorted_time = sorted(time_by_project.items(), key=lambda x: x[1], reverse=True)
     
@@ -34,16 +34,18 @@ def calculate_time_of_day_distribution(sessions: List[Session]) -> Dict[str, int
     
     for session in sessions:
         # Determine time-of-day category by the midpoint of the session
-        mid_ts = (session.start_time + session.end_time) // 2
+        end_time = session.end_time if session.end_time is not None else (session.start_time + (session.duration_seconds or 0))
+        mid_ts = (session.start_time + end_time) // 2
         dt = datetime.fromtimestamp(mid_ts)
         hour = dt.hour
         
+        duration = session.duration_seconds or 0
         if 6 <= hour < 12:
-            distribution["morning"] += session.duration_seconds
+            distribution["morning"] += duration
         elif 12 <= hour < 18:
-            distribution["afternoon"] += session.duration_seconds
+            distribution["afternoon"] += duration
         else:
-            distribution["evening"] += session.duration_seconds
+            distribution["evening"] += duration
             
     return distribution
 
@@ -56,7 +58,7 @@ def calculate_day_distribution(sessions: List[Session]) -> Dict[str, int]:
         dt = datetime.fromtimestamp(session.start_time)
         day_name = dt.strftime("%A")
         if day_name in distribution:
-            distribution[day_name] += session.duration_seconds
+            distribution[day_name] += session.duration_seconds or 0
             
     return distribution
 
@@ -76,7 +78,7 @@ def calculate_focus_score(sessions: List[Session]) -> float:
     for s in sessions:
         day_str = datetime.fromtimestamp(s.start_time).strftime("%Y-%m-%d")
         projects_by_day[day_str].add(s.project_id)
-        total_duration += s.duration_seconds
+        total_duration += s.duration_seconds or 0
         
     # Calculate average projects per active day
     active_days = len(projects_by_day)
@@ -124,7 +126,7 @@ def detect_patterns_and_anomalies(sessions: List[Session], projects: List[Projec
             insights.append(f"Least active day: {least_day[0]} ({least_duration})")
             
     # 2. Average session duration
-    total_seconds = sum(s.duration_seconds for s in sessions)
+    total_seconds = sum(s.duration_seconds or 0 for s in sessions)
     avg_session_seconds = int(total_seconds / len(sessions))
     insights.append(f"Your average session duration is {format_duration(avg_session_seconds)} (very consistent)")
     
@@ -179,9 +181,11 @@ def calculate_streak(sessions: List[Session]) -> int:
     """Calculate consecutive active work days ending today or on the last active day."""
     if not sessions:
         return 0
+    from termstory.date_utils import get_current_time
+    today = get_current_time().date()
     active_dates = {
-        datetime.fromtimestamp(s.start_time).date()
-        for s in sessions
+        d for d in (datetime.fromtimestamp(s.start_time).date() for s in sessions)
+        if d <= today
     }
     if not active_dates:
         return 0
@@ -191,8 +195,6 @@ def calculate_streak(sessions: List[Session]) -> int:
     current_date = sorted_dates[0]
     
     # Allow a gap of at most 1 day (e.g. if today is inactive but yesterday was active, streak is still active)
-    from termstory.date_utils import get_current_time
-    today = get_current_time().date()
     if (today - current_date).days > 1:
         return 0
         
@@ -314,7 +316,7 @@ def analyze_all(db=None) -> Dict:
                 name = "Other"
             else:
                 name = raw_name
-        project_durations[name] += s.duration_seconds
+        project_durations[name] += s.duration_seconds or 0
         
     sorted_projects = sorted(project_durations.items(), key=lambda x: x[1], reverse=True)
     
@@ -373,7 +375,10 @@ def detect_late_night_chaotic_sessions(db=None) -> List[Dict]:
 
         for row in session_rows:
             s_id, start, end, duration, p_id = row
-            dt = datetime.fromtimestamp(start)
+            try:
+                dt = datetime.fromtimestamp(start)
+            except (OSError, ValueError, OverflowError):
+                continue
             hour = dt.hour
 
             # Late night check: 11 PM (23) to 5 AM (5)

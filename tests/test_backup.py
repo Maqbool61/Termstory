@@ -53,3 +53,34 @@ def test_backup_and_restore(tmp_path, monkeypatch):
     conn.close()
     assert len(commands) == 1
     assert commands[0][0] == "echo hello"
+
+
+def test_backup_rotation(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_rotation.db"
+    db_path = str(db_file)
+    monkeypatch.setenv("DB_PATH", db_path)
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: db_path)
+    monkeypatch.setattr("termstory.backup.get_db_path", lambda: db_path)
+
+    db = Database(db_path)
+    db.init_db()
+
+    # Create 12 backups with incrementing simulated time
+    class MockDatetime:
+        counter = 0
+        @classmethod
+        def now(cls):
+            cls.counter += 1
+            from datetime import datetime as dt
+            return dt(2026, 6, 18, 19, 0, cls.counter)
+
+    monkeypatch.setattr("termstory.backup.datetime", MockDatetime)
+
+    for _ in range(12):
+        backup_db()
+
+    from termstory.backup import _get_backup_dir
+    backup_dir = _get_backup_dir()
+    import glob
+    remaining = glob.glob(os.path.join(backup_dir, "termstory_backup_*.db"))
+    assert len(remaining) == 10

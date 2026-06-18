@@ -227,3 +227,19 @@ def test_cli_export_command(tmp_path, monkeypatch):
     except ValueError:
         invalid_out = result_invalid.stdout
     assert "Error: Unsupported format" in invalid_out
+
+
+def test_export_csv_null_end_time(temp_db, capsys):
+    # Retrieve a session and set its end_time to None
+    sessions = fetch_export_data(temp_db)
+    sessions[0].end_time = None
+    
+    # Should not raise TypeError
+    export_csv(sessions, temp_db, output_file=None)
+    
+    captured = capsys.readouterr()
+    reader = csv.DictReader(captured.out.splitlines())
+    rows = list(reader)
+    assert len(rows) == 4
+    assert rows[0]["session_end_time"] == ""
+

@@ -41,7 +41,7 @@ def test_archive_logic(tmp_path, monkeypatch):
     new_time = base_time - (5 * 24 * 3600)   # 5 days ago
     
     # Create projects with required fields session_count and total_time
-    old_project = Project(id=1, name="Old Project", path="~/old", first_seen=old_time, last_seen=old_time, session_count=1, total_time=60)
+    old_project = Project(id=1, name="Old Project", path="~/old", first_seen=old_time, last_seen=old_time, session_count=1, total_time=60, project_context="Old context")
     new_project = Project(id=2, name="New Project", path="~/new", first_seen=new_time, last_seen=new_time, session_count=1, total_time=60)
     
     # Create sessions & commands
@@ -137,6 +137,12 @@ def test_archive_logic(tmp_path, monkeypatch):
     macro_arch = [r[0] for r in c_arch.fetchall()]
     assert "2026-04" in macro_arch
     assert "2026-06-10" not in macro_arch
+    
+    c_arch.execute("SELECT name, project_context FROM projects WHERE id = ?", (sessions_arch[0][1],))
+    proj_row = c_arch.fetchone()
+    assert proj_row is not None
+    assert proj_row[0] == "Old Project"
+    assert proj_row[1] == "Old context"
     
     # Check archive search index
     c_arch.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='search_index'")

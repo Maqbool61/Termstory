@@ -154,14 +154,23 @@ def project_breakdown(db: Database) -> Dict[str, Dict[str, Any]]:
         
     return breakdown
 
+_LANG_CACHE = {}
+
 def detect_project_language_from_files(path: str) -> Optional[str]:
     """Helper to check common config files on disk to infer project language."""
-    if not path or not os.path.isdir(path):
+    if not path:
+        return None
+    if path in _LANG_CACHE:
+        return _LANG_CACHE[path]
+        
+    if not os.path.isdir(path):
+        _LANG_CACHE[path] = None
         return None
         
     path_lower = path.lower()
     for prefix in ["/mnt", "/volumes/smb", "\\\\"]:
         if path_lower.startswith(prefix):
+            _LANG_CACHE[path] = None
             return None
             
     checks = [
@@ -181,6 +190,7 @@ def detect_project_language_from_files(path: str) -> Optional[str]:
     for filename, lang in checks:
         try:
             if os.path.exists(os.path.join(path, filename)):
+                _LANG_CACHE[path] = lang
                 return lang
         except Exception:
             pass
@@ -188,12 +198,15 @@ def detect_project_language_from_files(path: str) -> Optional[str]:
     try:
         for f in os.listdir(path):
             if f.endswith(".csproj") or f.endswith(".sln"):
+                _LANG_CACHE[path] = "C#"
                 return "C#"
             if f == "Makefile":
+                _LANG_CACHE[path] = "C/C++"
                 return "C/C++"
     except Exception:
         pass
         
+    _LANG_CACHE[path] = None
     return None
 
 def language_detection(db: Database) -> Dict[str, float]:
@@ -244,7 +257,20 @@ def language_detection(db: Database) -> Dict[str, float]:
             tokens = cmd_text.strip().split()
             if tokens:
                 first_token = os.path.basename(tokens[0].lower())
+                for ext in ['.exe', '.bat', '.cmd', '.sh']:
+                    if first_token.endswith(ext):
+                        first_token = first_token[:-len(ext)]
+                        break
                 lang = cmd_classifications.get(first_token)
+                if not lang:
+                    if first_token.startswith("python") or first_token.startswith("pip") or first_token.startswith("pytest"):
+                        lang = "Python"
+                    elif first_token.startswith("npm") or first_token.startswith("yarn") or first_token.startswith("pnpm") or first_token.startswith("node"):
+                        lang = "JavaScript/TypeScript"
+                    elif first_token.startswith("cargo") or first_token.startswith("rust"):
+                        lang = "Rust"
+                    elif first_token == "go" or first_token.startswith("go-") or first_token.startswith("gofmt") or first_token.startswith("gotest"):
+                        lang = "Go"
                 
         if lang:
             lang_counts[lang] += 1

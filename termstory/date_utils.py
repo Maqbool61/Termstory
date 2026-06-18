@@ -9,7 +9,10 @@ def get_current_time() -> datetime:
     override = os.environ.get("TERMSTORY_DATE_OVERRIDE")
     if override:
         try:
-            return date_parser.parse(override)
+            dt = date_parser.parse(override)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone().replace(tzinfo=None)
+            return dt
         except Exception:
             pass
     return datetime.now()
@@ -48,6 +51,9 @@ def format_date_range(start_ts: int, end_ts: int) -> str:
     start_dt = datetime.fromtimestamp(start_ts)
     end_dt = datetime.fromtimestamp(end_ts)
     
+    if start_dt.year == end_dt.year and start_dt.month == end_dt.month and start_dt.day == end_dt.day:
+        return start_dt.strftime('%B %d, %Y')
+        
     if start_dt.year == end_dt.year:
         if start_dt.month == end_dt.month:
             return f"{start_dt.strftime('%B %d')} - {end_dt.strftime('%d, %Y')}"
@@ -70,12 +76,15 @@ def parse_date_range_helper(date_range_str: str) -> Tuple[int, int]:
         end = datetime.combine(yesterday.date(), time.max)
         return int(start.timestamp()), int(end.timestamp())
         
-    elif dr.endswith("days"):
+    elif dr.endswith("days") or dr.endswith("day"):
+        num_part = dr[:-4] if dr.endswith("days") else dr[:-3]
+        num_part = num_part.replace("last", "").strip()
         try:
-            days = int(dr[:-4])
-            start = datetime.combine((now - timedelta(days=days)).date(), time.min)
-            end = datetime.combine(now.date(), time.max)
-            return int(start.timestamp()), int(end.timestamp())
+            days = int(num_part)
+            if days >= 0:
+                start = datetime.combine((now - timedelta(days=days)).date(), time.min)
+                end = datetime.combine(now.date(), time.max)
+                return int(start.timestamp()), int(end.timestamp())
         except ValueError:
             pass
             

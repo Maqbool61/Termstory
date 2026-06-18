@@ -197,3 +197,65 @@ def test_escaping_of_json_script_tags(tmp_path, monkeypatch):
     assert "\\u003cscript\\u003ealert('ai')\\u003c/script\\u003e" in html
     assert "\\u0026some_path" in html
 
+
+def test_swarm_audit_fixes(tmp_path, monkeypatch):
+    # 1. Setup a populated DB
+    db_file = tmp_path / "swarm.db"
+    db = Database(str(db_file))
+    db.init_db()
+    
+    # We will insert more than 1000 sessions (e.g. 1005 sessions) to check uncapped override
+    now = int(datetime(2026, 6, 14, 12, 0, 0).timestamp())
+    
+    projects = [Project(id=1, name="Project A", path="/path/to/a", first_seen=now, last_seen=now, session_count=1005, total_time=10050)]
+    sessions = []
+    commands = []
+    for i in range(1005):
+        s_id = i + 1
+        s_time = now - i * 10  # spread out in time
+        sessions.append(Session(id=s_id, start_time=s_time, end_time=s_time + 5, duration_seconds=5, project_id=1))
+        # Add a command with a backslash in it to test backslash replacement safety
+        cmd_text = "echo 'backslash \\ test'" if i == 0 else "ls"
+        commands.append(Command(timestamp=s_time, command=cmd_text, exit_code=0, session_id=s_id, project_id=1))
+        
+    db.save_data(projects, sessions, commands)
+    
+    # Check stats for date range (to trigger the overrides)
+    start_ts = now - 20000
+    data = get_web_data(db, start_ts=start_ts)
+    
+    # Verify KPI stats override does NOT cap at 1000
+    assert data["stats"]["total_sessions"] == 1005
+    assert data["stats"]["total_commands"] == 1005
+    assert data["stats"]["total_projects"] == 1
+    
+    # Verify daily activity heatmap calculations work and are populated
+    today_str = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
+    assert today_str in data["daily_activity"]
+    # The sum of commands across all days in heatmap should be 1005
+    total_heatmap_commands = sum(day["commands"] for day in data["daily_activity"].values())
+    assert total_heatmap_commands == 1005
+    
+    # Test custom template with const reportData = ... and backslashes
+    template_file = tmp_path / "custom_template.html"
+    with open(template_file, "w", encoding="utf-8") as f:
+        f.write("<html><head><script>const reportData = {};</script></head><body></body></html>")
+        
+    # Mock expanduser
+    report_dir = tmp_path / ".termstory"
+    monkeypatch.setattr("os.path.expanduser", lambda path: str(report_dir / "report.html") if "report.html" in path else str(report_dir))
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+    
+    # Generate report with custom template
+    generate_and_open_report(db, template=str(template_file), start_ts=start_ts)
+    
+    # Verify report generated correctly and backslashes were not mangled or caused crashes
+    report_file = report_dir / "report.html"
+    with open(report_file, "r", encoding="utf-8") as f:
+        html = f.read()
+        
+    assert "const reportData =" in html
+    # Check if our backslash command exists intact in the JSON
+    assert "backslash \\\\" in html
+
+

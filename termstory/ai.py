@@ -33,6 +33,7 @@ def clear_last_ai_error() -> None:
         delattr(_local_ai_state, "last_error")
 
 def _get_project_context_from_db(project_name: str) -> Optional[str]:
+    conn = None
     try:
         from termstory.config import get_db_path
         from termstory.database import Database
@@ -42,14 +43,17 @@ def _get_project_context_from_db(project_name: str) -> Optional[str]:
         cursor = conn.cursor()
         cursor.execute("SELECT project_context FROM projects WHERE name = ?", (project_name,))
         row = cursor.fetchone()
-        conn.close()
         if row:
             return row[0]
     except Exception:
         pass
+    finally:
+        if conn is not None:
+            conn.close()
     return None
 
 def _get_all_active_project_contexts() -> List[tuple]:
+    conn = None
     try:
         from termstory.config import get_db_path
         from termstory.database import Database
@@ -59,10 +63,12 @@ def _get_all_active_project_contexts() -> List[tuple]:
         cursor = conn.cursor()
         cursor.execute("SELECT name, project_context FROM projects WHERE project_context IS NOT NULL AND project_context != ''")
         rows = cursor.fetchall()
-        conn.close()
         return rows
     except Exception:
         return []
+    finally:
+        if conn is not None:
+            conn.close()
 
 def _is_current_worker_cancelled() -> bool:
     try:
@@ -149,22 +155,17 @@ def _send_llm_request(
 
         def _worker():
             try:
-                old_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(timeout)
-                try:
-                    # Set a reasonable timeout for the TUI background thread
-                    with urllib.request.urlopen(req, timeout=timeout) as response:
-                        resp_data = response.read().decode("utf-8")
-                        resp_json = json.loads(resp_data)
-                        result = resp_json["choices"][0]["message"]["content"].strip()
-                        # Clean up any quotes added by the LLM
-                        if result.startswith('"') and result.endswith('"'):
-                            result = result[1:-1]
-                        if result.startswith("'") and result.endswith("'"):
-                            result = result[1:-1]
-                        result_box.append(result)
-                finally:
-                    socket.setdefaulttimeout(old_timeout)
+                # Set a reasonable timeout for the TUI background thread
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    resp_data = response.read().decode("utf-8")
+                    resp_json = json.loads(resp_data)
+                    result = resp_json["choices"][0]["message"]["content"].strip()
+                    # Clean up any quotes added by the LLM
+                    if result.startswith('"') and result.endswith('"'):
+                        result = result[1:-1]
+                    if result.startswith("'") and result.endswith("'"):
+                        result = result[1:-1]
+                    result_box.append(result)
             except Exception as e:
                 error_box.append(e)
 

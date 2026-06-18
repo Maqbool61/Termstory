@@ -1068,13 +1068,14 @@ class Database:
         try:
             cursor = conn.cursor()
             
+            effective_end = end_time if end_time is not None else start_time
             # 5 minutes pre-buffer, 10 minutes post-buffer
             cursor.execute("""
                 SELECT hash, timestamp, message, cleaned_message
                 FROM commits
                 WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
                 ORDER BY timestamp ASC
-            """, (project_id, start_time - 300, end_time + 600))
+            """, (project_id, start_time - 300, effective_end + 600))
             
             rows = cursor.fetchall()
             commits = []
@@ -1176,12 +1177,13 @@ class Database:
                 all_commits = []
                 matching_commits = []
                 if p_id is not None:
+                    effective_end = end_time if end_time is not None else start_time
                     cursor.execute("""
                         SELECT hash, timestamp, message, cleaned_message 
                         FROM commits 
                         WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
                         ORDER BY timestamp ASC
-                    """, (p_id, start_time - 300, end_time + 600))
+                    """, (p_id, start_time - 300, effective_end + 600))
                     for c_row in cursor.fetchall():
                         c_dict = {
                             "hash": c_row[0],
@@ -1444,12 +1446,13 @@ class Database:
                 all_commits = []
                 matching_commits = []
                 if p_id is not None:
+                    effective_end = end_time if end_time is not None else start_time
                     cursor.execute("""
                         SELECT hash, timestamp, message, cleaned_message 
                         FROM commits 
                         WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
                         ORDER BY timestamp ASC
-                    """, (p_id, start_time - 300, end_time + 600))
+                    """, (p_id, start_time - 300, effective_end + 600))
                     for c_row in cursor.fetchall():
                         c_dict = {
                             "hash": c_row[0],

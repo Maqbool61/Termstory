@@ -59,7 +59,7 @@ def capture_git_status(cwd: str) -> Dict[str, Any]:
         "uncommitted_files": []
     }
     
-    if not os.path.exists(cwd) or not os.path.isdir(cwd):
+    if not cwd or not os.path.exists(cwd) or not os.path.isdir(cwd):
         return result
         
     try:
@@ -69,6 +69,7 @@ def capture_git_status(cwd: str) -> Dict[str, Any]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             check=False,
             timeout=5
         )
@@ -83,6 +84,7 @@ def capture_git_status(cwd: str) -> Dict[str, Any]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             check=False,
             timeout=5
         )
@@ -95,6 +97,7 @@ def capture_git_status(cwd: str) -> Dict[str, Any]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             check=False,
             timeout=5
         )
@@ -112,7 +115,10 @@ def capture_git_status(cwd: str) -> Dict[str, Any]:
 
 def capture_mcp_snapshot() -> Dict[str, Any]:
     """Capture a snapshot of the IDE state, git status, and active terminal directories"""
-    cwd = os.getcwd()
+    try:
+        cwd = os.getcwd()
+    except Exception:
+        cwd = None
     ide_info = capture_ide_state()
     git_info = capture_git_status(cwd)
     return {

@@ -11,12 +11,16 @@ from termstory.models import Session, Command, Project, format_duration
 console = Console()
 
 def format_relative_time(seconds: int) -> str:
+    sign = "+"
+    if seconds < 0:
+        sign = "-"
+        seconds = abs(seconds)
     h = seconds // 3600
     m = (seconds % 3600) // 60
     s = seconds % 60
     if h > 0:
-        return f"+{h:02d}:{m:02d}:{s:02d}"
-    return f"+{m:02d}:{s:02d}"
+        return f"{sign}{h:02d}:{m:02d}:{s:02d}"
+    return f"{sign}{m:02d}:{s:02d}"
 
 def list_recent_sessions(db: Database) -> None:
     conn = db.get_connection()

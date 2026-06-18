@@ -149,3 +149,10 @@ def test_capture_and_store_mcp_snapshot(mock_git, mock_ide, mock_cwd):
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def test_capture_mcp_snapshot_deleted_cwd():
+    with patch("termstory.mcp_snapshot.os.getcwd", side_effect=FileNotFoundError("No such file or directory")):
+        snapshot = capture_mcp_snapshot()
+        assert snapshot["cwd"] is None
+        assert not snapshot["git"]["is_repo"]

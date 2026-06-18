@@ -139,3 +139,13 @@ def test_redact_specific_api_keys():
     assert redact_command("OPENAI_API_KEY=mysecretkey python3 app.py") == "OPENAI_API_KEY=[REDACTED] python3 app.py"
     assert redact_command("export DEEPSEEK_API_KEY=something") == "export DEEPSEEK_API_KEY=[REDACTED]"
 
+
+def test_blacklist_sk_false_positives():
+    # A safe filename with hyphens/underscores starting with sk- should NOT match blacklist
+    assert should_blacklist_command("ls sk-production-deployment-config") is False
+    assert should_blacklist_command("cat sk-dataset-version-2-csv") is False
+    
+    # But a real sk- key prefix should still be blacklisted
+    assert should_blacklist_command("export KEY=sk-proj-1234567890abcdef1234567890abcdef1234567890abcdef") is True
+
+

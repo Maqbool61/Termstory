@@ -39,27 +39,29 @@ def get_web_data(db: Database, start_ts: Optional[int] = None, end_ts: Optional[
 
     # 3. Filtered Sessions
     conn = db.get_connection()
-    cursor = conn.cursor()
-    
-    query = "SELECT id FROM sessions"
-    params = []
-    conditions = []
-    if start_ts is not None:
-        conditions.append("start_time >= ?")
-        params.append(start_ts)
-    if end_ts is not None:
-        conditions.append("start_time <= ?")
-        params.append(end_ts)
+    try:
+        cursor = conn.cursor()
         
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY start_time DESC LIMIT 1000"
-    else:
-        query += " ORDER BY start_time DESC LIMIT 30"
-        
-    cursor.execute(query, params)
-    session_ids = [row[0] for row in cursor.fetchall()]
-    conn.close()
+        query = "SELECT id FROM sessions"
+        params = []
+        conditions = []
+        if start_ts is not None:
+            conditions.append("start_time >= ?")
+            params.append(start_ts)
+        if end_ts is not None:
+            conditions.append("start_time <= ?")
+            params.append(end_ts)
+            
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY start_time DESC LIMIT 1000"
+        else:
+            query += " ORDER BY start_time DESC LIMIT 30"
+            
+        cursor.execute(query, params)
+        session_ids = [row[0] for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
     sessions = db.get_sessions_by_ids(session_ids)
     sessions_data = []
@@ -105,34 +107,71 @@ def get_web_data(db: Database, start_ts: Optional[int] = None, end_ts: Optional[
 
     # Override total KPI stats if range is specified
     if start_ts is not None or end_ts is not None:
-        stats["total_sessions"] = len(sessions_data)
-        stats["total_commands"] = sum(len(s.commands) for s in sessions)
-        stats["total_projects"] = len(set(s.project_id for s in sessions if s.project_id is not None))
+        conn = db.get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Count sessions in range
+            query_s = "SELECT COUNT(*) FROM sessions"
+            query_c = "SELECT COUNT(*) FROM commands"
+            query_p = "SELECT COUNT(DISTINCT project_id) FROM sessions"
+            
+            conditions_s = []
+            conditions_c = []
+            params = []
+            if start_ts is not None:
+                conditions_s.append("start_time >= ?")
+                conditions_c.append("timestamp >= ?")
+                params.append(start_ts)
+            if end_ts is not None:
+                conditions_s.append("start_time <= ?")
+                conditions_c.append("timestamp <= ?")
+                params.append(end_ts)
+                
+            if conditions_s:
+                cond_s_str = " WHERE " + " AND ".join(conditions_s)
+                cond_c_str = " WHERE " + " AND ".join(conditions_c)
+                query_s += cond_s_str
+                query_p += cond_s_str
+                query_c += cond_c_str
+                
+            cursor.execute(query_s, params)
+            stats["total_sessions"] = cursor.fetchone()[0]
+            
+            cursor.execute(query_p, params)
+            stats["total_projects"] = cursor.fetchone()[0]
+            
+            cursor.execute(query_c, params)
+            stats["total_commands"] = cursor.fetchone()[0]
+        finally:
+            conn.close()
 
     # 4. AI Summary Highlights
     ai_sessions = [s for s in sessions_data if s["ai_summary"]]
     if len(ai_sessions) < 15:
         # Fetch more from DB if we don't have enough in the filtered set
         conn = db.get_connection()
-        cursor = conn.cursor()
-        
-        # Build query for general AI highlights
-        query_ai = "SELECT id FROM sessions WHERE ai_summary IS NOT NULL AND ai_summary != ''"
-        params_ai = []
-        conditions_ai = []
-        if start_ts is not None:
-            conditions_ai.append("start_time >= ?")
-            params_ai.append(start_ts)
-        if end_ts is not None:
-            conditions_ai.append("start_time <= ?")
-            params_ai.append(end_ts)
-        if conditions_ai:
-            query_ai += " AND " + " AND ".join(conditions_ai)
-        query_ai += " ORDER BY start_time DESC LIMIT 15"
-        
-        cursor.execute(query_ai, params_ai)
-        extra_ids = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            
+            # Build query for general AI highlights
+            query_ai = "SELECT id FROM sessions WHERE ai_summary IS NOT NULL AND ai_summary != ''"
+            params_ai = []
+            conditions_ai = []
+            if start_ts is not None:
+                conditions_ai.append("start_time >= ?")
+                params_ai.append(start_ts)
+            if end_ts is not None:
+                conditions_ai.append("start_time <= ?")
+                params_ai.append(end_ts)
+            if conditions_ai:
+                query_ai += " AND " + " AND ".join(conditions_ai)
+            query_ai += " ORDER BY start_time DESC LIMIT 15"
+            
+            cursor.execute(query_ai, params_ai)
+            extra_ids = [row[0] for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
         extra_ids_to_fetch = [eid for eid in extra_ids if eid not in [s["id"] for s in sessions_data]]
         if extra_ids_to_fetch:
@@ -172,25 +211,25 @@ def get_web_data(db: Database, start_ts: Optional[int] = None, end_ts: Optional[
     conn = db.get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT timestamp FROM commands WHERE timestamp >= ?", (ninety_days_ago_ts,))
-        cmd_ts_rows = cursor.fetchall()
-        for (ts,) in cmd_ts_rows:
-            try:
-                ds = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-                if ds in daily_activity:
-                    daily_activity[ds]["commands"] += 1
-            except Exception:
-                pass
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d', datetime(timestamp, 'unixepoch', 'localtime')) as day, COUNT(*)
+            FROM commands
+            WHERE timestamp >= ?
+            GROUP BY day
+        """, (ninety_days_ago_ts,))
+        for day, count in cursor.fetchall():
+            if day in daily_activity:
+                daily_activity[day]["commands"] = count
                 
-        cursor.execute("SELECT start_time FROM sessions WHERE start_time >= ?", (ninety_days_ago_ts,))
-        sess_ts_rows = cursor.fetchall()
-        for (ts,) in sess_ts_rows:
-            try:
-                ds = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-                if ds in daily_activity:
-                    daily_activity[ds]["sessions"] += 1
-            except Exception:
-                pass
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d', datetime(start_time, 'unixepoch', 'localtime')) as day, COUNT(*)
+            FROM sessions
+            WHERE start_time >= ?
+            GROUP BY day
+        """, (ninety_days_ago_ts,))
+        for day, count in cursor.fetchall():
+            if day in daily_activity:
+                daily_activity[day]["sessions"] = count
     except Exception:
         pass
     finally:
@@ -224,7 +263,7 @@ def generate_and_open_report(
             import re
             html_content = re.sub(
                 r"const reportData\s*=\s*.*?;",
-                f"const reportData = {safe_data_str};",
+                lambda m: f"const reportData = {safe_data_str};",
                 custom_template_content
             )
         else:

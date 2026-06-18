@@ -16,15 +16,18 @@ _BM25_B  = 0.75  # length normalisation
 def _get_project_names_map() -> Dict[int, str]:
     """Helper to extract a mapping of project IDs to names from database."""
     db_path = get_db_path()
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT id, name FROM projects;")
         res = {row[0]: row[1] for row in cursor.fetchall()}
-        conn.close()
         return res
     except Exception:
         return {}
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _tokenize(text: str) -> List[str]:
@@ -42,7 +45,7 @@ def _make_bigrams(tokens: List[str]) -> List[str]:
 def _session_tokens(s: Session, project_map: Dict[int, str]) -> List[str]:
     """Build a flat token list (unigrams + bigrams) for a session document."""
     parts = []
-    p_name = project_map.get(s.project_id, "Other") if s.project_id else "Other"
+    p_name = project_map.get(s.project_id, "Other") if s.project_id is not None else "Other"
     # Weight project name and AI summary more heavily by repeating them
     parts.extend([p_name] * 3)
     if s.ai_summary:
@@ -300,7 +303,7 @@ def generate_answer(query: str, sessions: List[Session], ai_client) -> Optional[
     # Format session contexts into a technical audit block
     context_blocks = []
     for idx, s in enumerate(sessions):
-        p_name = project_map.get(s.project_id, "Other") if s.project_id else "Other"
+        p_name = project_map.get(s.project_id, "Other") if s.project_id is not None else "Other"
 
         block = [
             f"Session #{idx + 1}",

@@ -325,3 +325,35 @@ def test_parse_bash_history_out_of_order_anchors(tmp_path):
     assert commands[2].command == "second cmd"
     assert commands[2].timestamp == 1748851250
 
+
+def test_parse_zsh_history_corrupt_timestamps(tmp_path):
+    # History containing legacy commands followed by a corrupted 0 timestamp
+    temp_file = tmp_path / "zsh_corrupt_ts_test"
+    temp_file.write_text(
+        "legacy cmd 1\n"
+        "legacy cmd 2\n"
+        ": 0:0;git status\n"
+    )
+    # Even with 0 timestamp, legacy commands should be parsed and mapped to a reasonable range
+    commands = parse_zsh_history(str(temp_file))
+    assert len(commands) == 2  # The corrupted 'git status' at timestamp 0 is filtered out, but legacy commands remain
+    assert commands[0].command == "legacy cmd 1"
+    assert commands[1].command == "legacy cmd 2"
+
+def test_assign_missing_timestamps_fallback_clamping():
+    from termstory.parser import _assign_missing_timestamps_fallback
+    # Pass a list containing a very old out-of-bound timestamp
+    temp_commands = [
+        (0, "old cmd"),
+        (1748851200, "valid cmd"),
+        (None, "missing cmd")
+    ]
+    # Under _assign_missing_timestamps_fallback, the '0' timestamp is cleaned to None,
+    # leaving only 'valid cmd' as the sole anchor.
+    commands = _assign_missing_timestamps_fallback(temp_commands, 1748851200, None)
+    assert len(commands) == 3
+    assert commands[0].command == "old cmd"
+    # Its timestamp should be resolved reasonably relative to the valid anchor rather than being clamped to 5 years ago
+    assert commands[0].timestamp == 1748851190
+
+

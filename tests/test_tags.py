@@ -89,6 +89,45 @@ def test_auto_tag_all_sessions():
         s2_tags = session_map[s2.id].tags
         assert s2_tags is not None
         assert set(s2_tags.split(",")) == {"deploy", "docs"}
+
+        # Test active session (end_time = None)
+        # Verify it doesn't crash during auto_tag_all_sessions
+        # We manually insert a session with NULL end_time to ensure it remains NULL in sqlite
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO sessions (id, start_time, end_time, duration_seconds, project_id) VALUES (?, ?, ?, ?, ?)", (3, 1700, None, 0, None))
+        cursor.execute("INSERT INTO commands (command, timestamp, session_id) VALUES (?, ?, ?)", ("pip install requests", 1710, 3))
+        conn.commit()
+        conn.close()
+
+        # Run auto-tagging incrementally (force=False)
+        auto_tag_all_sessions(db, force=False)
+
+        # Verify active session got tagged
+        sessions = db.get_sessions_by_ids([3])
+        assert len(sessions) == 1
+        assert sessions[0].tags == "setup"
+
+        # Verify that if we manually change s1's tag to something else,
+        # incremental auto-tagging (force=False) preserves it (does not overwrite it),
+        # but force=True overrides/rebuilds it.
+        conn = db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE sessions SET tags = 'custom_tag' WHERE id = 1")
+        conn.commit()
+        conn.close()
+
+        # Run incremental auto-tagging (force=False)
+        auto_tag_all_sessions(db, force=False)
+        # Retrieve s1
+        sessions = db.get_sessions_by_ids([1])
+        assert sessions[0].tags == "custom_tag"
+
+        # Run force auto-tagging (force=True)
+        auto_tag_all_sessions(db, force=True)
+        # Retrieve s1 again
+        sessions = db.get_sessions_by_ids([1])
+        assert set(sessions[0].tags.split(",")) == {"setup", "test"}
         
     finally:
         if os.path.exists(temp_db_path):

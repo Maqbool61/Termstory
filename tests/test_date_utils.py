@@ -56,6 +56,11 @@ def test_get_month_range():
     assert end_dt.year == 2026 and end_dt.month == 6 and end_dt.day == 30
 
 def test_format_date_range():
+    # Same day
+    s4 = datetime(2026, 6, 1, 10, 0).timestamp()
+    e4 = datetime(2026, 6, 1, 15, 0).timestamp()
+    assert format_date_range(int(s4), int(e4)) == "June 01, 2026"
+
     # Same month
     s = datetime(2026, 6, 1, 0, 0).timestamp()
     e = datetime(2026, 6, 7, 23, 59).timestamp()
@@ -70,3 +75,24 @@ def test_format_date_range():
     s3 = datetime(2025, 12, 29, 0, 0).timestamp()
     e3 = datetime(2026, 1, 4, 23, 59).timestamp()
     assert format_date_range(int(s3), int(e3)) == "December 29, 2025 - January 04, 2026"
+
+def test_parse_date_range_flexible(monkeypatch):
+    from termstory.date_utils import parse_date_range_helper
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-19 12:00:00")
+    
+    # Test "1 day"
+    start, end = parse_date_range_helper("1 day")
+    start_dt = datetime.fromtimestamp(start)
+    end_dt = datetime.fromtimestamp(end)
+    assert start_dt.year == 2026 and start_dt.month == 6 and start_dt.day == 18
+    assert end_dt.year == 2026 and end_dt.month == 6 and end_dt.day == 19
+    
+    # Test "last 7 days"
+    start, end = parse_date_range_helper("last 7 days")
+    start_dt = datetime.fromtimestamp(start)
+    assert start_dt.year == 2026 and start_dt.month == 6 and start_dt.day == 12
+
+def test_timezone_aware_override(monkeypatch):
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-19T12:00:00+05:30")
+    ct = get_current_time()
+    assert ct.tzinfo is None

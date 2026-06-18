@@ -1,5 +1,7 @@
 import os
 import shutil
+import sqlite3
+import glob
 from datetime import datetime
 from termstory.config import get_db_path
 
@@ -24,7 +26,26 @@ def backup_db() -> str:
     backup_dir = _get_backup_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.join(backup_dir, f"termstory_backup_{timestamp}.db")
-    shutil.copy2(db_path, backup_path)
+
+    # Safely backup the SQLite database using backup API
+    src = sqlite3.connect(db_path)
+    dst = sqlite3.connect(backup_path)
+    try:
+        src.backup(dst)
+    finally:
+        src.close()
+        dst.close()
+
+    # Rotate backups: keep at most 10 latest backups
+    try:
+        backups = sorted(glob.glob(os.path.join(backup_dir, "termstory_backup_*.db")))
+        while len(backups) > 10:
+            oldest = backups.pop(0)
+            if os.path.exists(oldest):
+                os.remove(oldest)
+    except Exception:
+        pass  # Rotation failure should not crash the backup process
+
     return backup_path
 
 
@@ -39,5 +60,12 @@ def restore_db(backup_path: str) -> None:
     db_path = get_db_path()
     # Ensure the destination directory exists
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    # Replace the current database with the backup (atomic replace)
-    shutil.copy2(backup_path, db_path)
+
+    # Replace the current database with the backup using backup API
+    src = sqlite3.connect(backup_path)
+    dst = sqlite3.connect(db_path)
+    try:
+        src.backup(dst)
+    finally:
+        src.close()
+        dst.close()

@@ -16,6 +16,8 @@ def test_format_relative_time():
     assert format_relative_time(3599) == "+59:59"
     assert format_relative_time(3600) == "+01:00:00"
     assert format_relative_time(3665) == "+01:01:05"
+    assert format_relative_time(-5) == "-00:05"
+    assert format_relative_time(-3665) == "-01:01:05"
 
 def test_list_recent_sessions(tmp_path):
     db_file = tmp_path / "test_replay_list.db"

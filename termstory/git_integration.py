@@ -15,6 +15,7 @@ def is_git_repo(path: str) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             check=False,
             timeout=10
         )
@@ -24,7 +25,7 @@ def is_git_repo(path: str) -> bool:
 
 def clean_commit_message(message: str) -> str:
     """Clean commit message for display by removing emojis, JIRA codes, PR numbers, and prefixes"""
-    if not message:
+    if not message or not isinstance(message, str):
         return ""
         
     msg = message.strip()
@@ -53,8 +54,8 @@ def clean_commit_message(message: str) -> str:
     msg = re.sub(r'^\[[A-Za-z]+-\d+\]\s*', '', msg)
     msg = re.sub(r'^[A-Za-z]+-\d+[:\s]\s*', '', msg)
     
-    # 4. Strip conventional commit prefixes (e.g. feat: fix: chore: etc. with case-insensitive flag at the start)
-    msg = re.sub(r'(?i)^(feat|fix|chore|docs|refactor|test|style|ci|perf|build)(?:\([a-zA-Z0-9_\-\/]+\))?:\s*', '', msg)
+    # 4. Strip conventional commit prefixes (e.g. feat: fix: chore: etc. with case-insensitive flag at the start, supporting breaking changes and revert)
+    msg = re.sub(r'(?i)^(feat|fix|chore|docs|refactor|test|style|ci|perf|build|revert)(?:\([a-zA-Z0-9_\-\/]+\))?!?:\s*', '', msg)
     
     # 5. Strip PR references at the end, e.g. '(#3044)' or ' #3044'
     msg = re.sub(r'\s*\(#\d+\)\s*$', '', msg)
@@ -87,6 +88,7 @@ def get_project_commits(project_path: str, since_ts: int, timeout: int = 10) -> 
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             check=False,
             timeout=timeout
         )
@@ -141,6 +143,7 @@ def get_timeframe_git_stats(project_paths: List[str], since_ts: int, until_ts: i
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                errors="replace",
                 check=False,
                 timeout=10
             )
@@ -169,6 +172,7 @@ def get_timeframe_git_stats(project_paths: List[str], since_ts: int, until_ts: i
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                errors="replace",
                 check=False,
                 timeout=10
             )

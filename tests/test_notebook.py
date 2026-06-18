@@ -133,3 +133,16 @@ def test_cli_notebook_command(temp_db, tmp_path, monkeypatch):
     file_content = out_file.read_text(encoding="utf-8")
     assert "# 2026-06-03" in file_content
     assert "# 2026-06-04" in file_content
+
+def test_generate_notebook_multiline_commit(temp_db):
+    sessions = temp_db.get_range_sessions(0, 9999999999)
+    s = sessions[0]
+    s.commits = [{
+        "hash": "b2c3d4e5f6g7",
+        "timestamp": s.start_time,
+        "message": "feat: add first feature\n\nHere is a detailed explanation of the feature.",
+        "cleaned_message": "feat: add first feature\n\nHere is a detailed explanation of the feature."
+    }]
+    markdown = generate_notebook([s], temp_db)
+    assert "feat: add first feature" in markdown
+    assert "Here is a detailed explanation" not in markdown

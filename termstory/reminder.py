@@ -62,12 +62,12 @@ def add_reminder(
     Associates the reminder with the latest session in the database if available.
     """
     if days is not None:
-        # Strip trailing 'in N days' if present in the text to avoid redundancy
-        m = re.match(r"^(.+?)\s+in\s+(\d+)\s+days?$", text, re.IGNORECASE)
-        if m:
-            about = m.group(1).strip()
-        else:
-            about = text
+        # Normalize whitespace and consistently strip prefix/suffix
+        text_clean = re.sub(r'\s+', ' ', text.strip())
+        prefix_pattern = re.compile(r"^(?:remind\s+me\s+)?(?:about|to)\s+", re.IGNORECASE)
+        about = prefix_pattern.sub("", text_clean)
+        suffix_pattern = re.compile(r"\s+in\s+(\d+)\s+days?$", re.IGNORECASE)
+        about = suffix_pattern.sub("", about).strip()
     else:
         about, days = parse_reminder_text(text)
         
