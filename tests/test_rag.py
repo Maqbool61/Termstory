@@ -201,4 +201,4 @@ def test_cli_search_semantic_missing_query(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(app, ["search", "--semantic"])
     assert result.exit_code == 1
-    assert "semantic search requires a search query" in result.stdout.lower()
+    assert "semantic search requires a search query" in result.output.lower()
