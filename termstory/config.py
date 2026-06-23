@@ -1,5 +1,6 @@
 import os
 import json
+import sys
 from typing import List, Any
 
 def get_app_dir(dir_type: str = "data") -> str:
@@ -163,14 +164,23 @@ def load_config() -> dict:
         "max_history_age": 5
     }
     
-    # 1. Read existing config file
-    config = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-        except Exception:
-            config = {}
+    #
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except json.JSONDecodeError as e:
+        print(
+            f"Warning: config file '{config_path}' contains invalid JSON and will be ignored ({e}).",
+            file=sys.stderr,
+        )
+        config = {}
+    except OSError as e:
+        print(
+            f"Warning: could not read config file '{config_path}': {e}",
+            file=sys.stderr,
+        )
+        config = {}
+
     if not isinstance(config, dict):
         config = {}
             
@@ -229,6 +239,7 @@ def load_config() -> dict:
         save_config(config)
         
     return config
+
 
 def save_config(config: dict) -> None:
     """Save configuration dictionary to disk"""
