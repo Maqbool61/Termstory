@@ -164,22 +164,26 @@ def load_config() -> dict:
         "max_history_age": 5
     }
     
-    #
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    except json.JSONDecodeError as e:
-        print(
-            f"Warning: config file '{config_path}' contains invalid JSON and will be ignored ({e}).",
-            file=sys.stderr,
-        )
-        config = {}
-    except OSError as e:
-        print(
-            f"Warning: could not read config file '{config_path}': {e}",
-            file=sys.stderr,
-        )
-        config = {}
+    config = {}
+
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            print(
+                f"Warning: config file '{config_path}' contains invalid data and will be ignored ({e}).",
+                file=sys.stderr,
+            )
+            config = {}
+
+        except OSError as e:
+            print(
+                f"Warning: could not read config file '{config_path}': {e}",
+                file=sys.stderr,
+            )
+            config = {}
 
     if not isinstance(config, dict):
         config = {}
