@@ -206,4 +206,61 @@ def test_http_error_whitespace_normalization(monkeypatch):
     assert res is None
     assert get_last_ai_error() == "HTTP Error 500: Something went wrong."
 
+def test_get_project_context_logs_warning_on_db_error(monkeypatch, caplog):
+    """When the DB lookup raises in _get_project_context_from_db,
+    the function returns None and logs a warning. Regression test for issue #109."""
+    from termstory.ai import _get_project_context_from_db
 
+    class BrokenCursor:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("simulated DB failure in fetch")
+
+    class BrokenConn:
+        def cursor(self):
+            return BrokenCursor()
+        def close(self):
+            pass
+
+    class BrokenDB:
+        def get_connection(self):
+            return BrokenConn()
+
+    monkeypatch.setattr("termstory.database.Database", lambda *args, **kwargs: BrokenDB())
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: "/tmp/fake.db")
+
+    with caplog.at_level("WARNING", logger="termstory.ai"):
+        result = _get_project_context_from_db("my-project")
+
+    assert result is None
+    assert any("_get_project_context_from_db" in r.message and "simulated DB failure" in str(r.exc_info[1])
+               for r in caplog.records if r.exc_info)
+
+
+def test_get_all_active_project_contexts_logs_warning_on_db_error(monkeypatch, caplog):
+    """When the DB lookup raises in _get_all_active_project_contexts,
+    the function returns an empty list and logs a warning. Regression test for issue #109."""
+    from termstory.ai import _get_all_active_project_contexts
+
+    class BrokenCursor:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("simulated DB failure in fetchall")
+
+    class BrokenConn:
+        def cursor(self):
+            return BrokenCursor()
+        def close(self):
+            pass
+
+    class BrokenDB:
+        def get_connection(self):
+            return BrokenConn()
+
+    monkeypatch.setattr("termstory.database.Database", lambda *args, **kwargs: BrokenDB())
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: "/tmp/fake.db")
+
+    with caplog.at_level("WARNING", logger="termstory.ai"):
+        result = _get_all_active_project_contexts()
+
+    assert result == []
+    assert any("_get_all_active_project_contexts" in r.message and "simulated DB failure" in str(r.exc_info[1])
+               for r in caplog.records if r.exc_info)

@@ -1,4 +1,5 @@
 import json
+import logging
 import urllib.request
 import urllib.error
 import threading
@@ -7,6 +8,7 @@ import socket
 from typing import List, Optional, Dict
 from termstory.sanitizer import sanitize_session_commands
 
+logger = logging.getLogger(__name__)
 _local_ai_state = threading.local()
 
 # Circuit Breaker Configuration
@@ -46,7 +48,12 @@ def _get_project_context_from_db(project_name: str) -> Optional[str]:
         if row:
             return row[0]
     except Exception:
-        pass
+        logger.warning(
+            "_get_project_context_from_db: failed to fetch project context for %r; "
+            "returning None.",
+            project_name,
+            exc_info=True,
+        )
     finally:
         if conn is not None:
             conn.close()
@@ -65,6 +72,11 @@ def _get_all_active_project_contexts() -> List[tuple]:
         rows = cursor.fetchall()
         return rows
     except Exception:
+        logger.warning(
+            "_get_all_active_project_contexts: failed to fetch project contexts; "
+            "returning empty list.",
+            exc_info=True,
+        )
         return []
     finally:
         if conn is not None:
