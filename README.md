@@ -14,7 +14,7 @@ TermStory turns your terminal history into a searchable, AI-narrated timeline of
 
 **One-liner (recommended):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bitflicker64/Termstory/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/bitflicker64/Termstory/main/scripts/install.sh | bash
 ```
 
 **Or from PyPI:**
