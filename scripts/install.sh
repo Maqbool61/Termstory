@@ -92,8 +92,28 @@ install_venv() {
   rm -rf "$final_venv"
   mv "$staging_venv" "$final_venv"
 
-  # Fix shebangs: mv doesn't update absolute interpreter paths in scripts
-  sed -i '' "1s|^#!.*python[0-9.]*$|#!$final_venv/bin/python3|" "$final_venv/bin/"* 2>/dev/null || true
+  # Fix shebangs: mv leaves pip-installed scripts pointing at staging path.
+  # Use venv's own Python (portable, handles & in paths, works on macOS and Linux).
+  "$final_venv/bin/python3" -c "
+import os, sys
+venv = sys.argv[1]
+py = os.path.join(venv, 'bin', 'python3')
+bin_dir = os.path.join(venv, 'bin')
+for f in os.listdir(bin_dir):
+    fp = os.path.join(bin_dir, f)
+    if not (os.path.isfile(fp) and os.access(fp, os.X_OK)):
+        continue
+    try:
+        with open(fp) as fh:
+            content = fh.read()
+    except OSError:
+        continue
+    if content.startswith('#!') and 'python' in content.splitlines()[0]:
+        newline = '#!' + py
+        rest = content[content.index(chr(10)):]
+        with open(fp, 'w') as fh:
+            fh.write(newline + rest)
+" "$final_venv"
 
   echo ""
   echo "  ✅ Installed in virtualenv."
