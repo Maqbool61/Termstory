@@ -92,6 +92,9 @@ install_venv() {
   rm -rf "$final_venv"
   mv "$staging_venv" "$final_venv"
 
+  # Fix shebangs: mv doesn't update absolute interpreter paths in scripts
+  sed -i '' "1s|^#!.*python[0-9.]*$|#!$final_venv/bin/python3|" "$final_venv/bin/"* 2>/dev/null || true
+
   echo ""
   echo "  ✅ Installed in virtualenv."
   echo "  Run right now:"
