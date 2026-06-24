@@ -508,6 +508,17 @@ class Database:
                                 f"start_time={session.start_time} returned no rows"
                             )
                         db_id = row[0]
+                        # The dict-match branch (above) updates end_time and
+                        # duration_seconds when it finds the session. In the
+                        # conflict-recovery branch the dict missed (different
+                        # project_id on the existing row vs the incoming one),
+                        # so we must apply the same UPDATE here or the session
+                        # keeps stale end_time/duration.
+                        cursor.execute(
+                            "UPDATE sessions SET end_time = ?, duration_seconds = ? "
+                            "WHERE id = ?",
+                            (session.end_time, session.duration_seconds, db_id),
+                        )
                     session.id = db_id
                     
                 if temp_id is not None:
