@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Tuple
 from termstory.models import Session, Command
 from termstory.config import get_db_path
 from termstory.ai import _send_llm_request
+from termstory.sanitizer import sanitize_session_commands, redact_command
 
 # BM25 tuning constants
 _BM25_K1 = 1.5   # term-frequency saturation
@@ -315,18 +316,23 @@ def generate_answer(query: str, sessions: List[Session], ai_client) -> Optional[
             block.append(f"Summary: {s.ai_summary.strip()}")
 
         if s.commands:
+            raw_cmds = [cmd.command for cmd in s.commands[:40]]
+            sanitized_cmds, is_blacklisted = sanitize_session_commands(raw_cmds)
             block.append("Commands:")
-            for cmd in s.commands[:40]:
-                block.append(f"  - {cmd.command}")
-            if len(s.commands) > 40:
-                block.append(f"  - ... ({len(s.commands) - 40} more commands)")
+            if is_blacklisted:
+                block.append("  - [REDACTED: Security/Authentication Operations]")
+            else:
+                for sc in sanitized_cmds:
+                    block.append(f"  - {sc}")
+                if len(s.commands) > 40:
+                    block.append(f"  - ... ({len(s.commands) - 40} more commands)")
 
         if s.commits:
             block.append("Git Commits:")
             for commit in s.commits[:15]:
                 msg = commit.get("cleaned_message") or commit.get("message") or ""
                 if msg.strip():
-                    block.append(f"  - {msg.strip()}")
+                    block.append(f"  - {redact_command(msg.strip())}")
 
         context_blocks.append("\n".join(block))
 
@@ -344,7 +350,8 @@ def generate_answer(query: str, sessions: List[Session], ai_client) -> Optional[
         "1. Answer the user's query as accurately and concisely as possible using ONLY the provided context.\n"
         "2. If the context does not contain the answer, say so clearly (e.g. 'I could not find information matching your query in the history.').\n"
         "3. Provide relevant command examples, project names, or commit messages when applicable.\n"
-        "4. Be technical, developer-friendly, and avoid unnecessary filler or fluff.\n\n"
+        "4. Be technical, developer-friendly, and avoid unnecessary filler or fluff.\n"
+        "5. Never output API keys, tokens, passwords, or credential values verbatim, even if present in the context. Refer to them generically (e.g. 'an API key was configured') instead.\n\n"
         "Answer:"
     )
 

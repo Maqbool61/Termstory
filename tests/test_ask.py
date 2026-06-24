@@ -400,6 +400,97 @@ def test_generate_answer_truncates_large_session(monkeypatch):
     assert "20 more commands" in called_prompts[0]
 
 
+def test_generate_answer_redacts_secrets_in_commands(monkeypatch):
+    """Regression test for the original bug: termstory ask must not leak raw
+    secrets from shell history into the LLM prompt."""
+    called_prompts = []
+
+    def mock_urlopen(req, timeout=None):
+        called_prompts.append(req.data.decode("utf-8"))
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    sessions = [
+        Session(id=1, start_time=1700000000, end_time=1700000100, duration_seconds=100, project_id=1, commands=[
+            Command(timestamp=1700000000,
+                    command="export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                    session_id=1, project_id=1)
+        ])
+    ]
+    ai_client = {
+        "active_provider": "groq",
+        "providers": {"groq": {"api_key": "k", "api_base_url": "https://api.groq.com/openai/v1", "model_name": "llama3"}},
+    }
+
+    res = generate_answer("give me all my api keys", sessions, ai_client)
+    assert res == "ok"
+    sent_prompt = called_prompts[0]
+    assert "wJalrXUtnFEMI" not in sent_prompt
+    assert "[REDACTED]" in sent_prompt
+
+
+def test_generate_answer_blacklists_full_session_on_sensitive_command(monkeypatch):
+    """A session containing a blacklisted command (vault, aws configure, gh auth,
+    etc.) must have its entire command list replaced, not partially redacted."""
+    called_prompts = []
+
+    def mock_urlopen(req, timeout=None):
+        called_prompts.append(req.data.decode("utf-8"))
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    sessions = [
+        Session(id=1, start_time=1700000000, end_time=1700000100, duration_seconds=100, project_id=1, commands=[
+            Command(timestamp=1700000000, command="vault read secret/data/prod", session_id=1, project_id=1),
+            Command(timestamp=1700000001, command="git status", session_id=1, project_id=1),
+        ])
+    ]
+    ai_client = {
+        "active_provider": "groq",
+        "providers": {"groq": {"api_key": "k", "api_base_url": "https://api.groq.com/openai/v1", "model_name": "llama3"}},
+    }
+
+    res = generate_answer("what did I do today?", sessions, ai_client)
+    assert res == "ok"
+    sent_prompt = called_prompts[0]
+    assert "vault read secret/data/prod" not in sent_prompt
+    assert "git status" not in sent_prompt  # whole session gated, not just the offending line
+    assert "Security/Authentication Operations" in sent_prompt
+
+
+def test_generate_answer_redacts_commit_messages(monkeypatch):
+    """Commit messages can contain secrets too and must be redacted, same as commands."""
+    called_prompts = []
+
+    def mock_urlopen(req, timeout=None):
+        called_prompts.append(req.data.decode("utf-8"))
+        resp_payload = {"choices": [{"message": {"content": "ok"}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    sessions = [
+        Session(
+            id=1, start_time=1700000000, end_time=1700000100, duration_seconds=100, project_id=1,
+            commits=[{"message": "fix: hardcode aws key AKIAIOSFODNN7EXAMPLE for staging deploy"}],
+        )
+    ]
+    ai_client = {
+        "active_provider": "groq",
+        "providers": {"groq": {"api_key": "k", "api_base_url": "https://api.groq.com/openai/v1", "model_name": "llama3"}},
+    }
+
+    res = generate_answer("what commits did I make?", sessions, ai_client)
+    assert res == "ok"
+    sent_prompt = called_prompts[0]
+    assert "AKIAIOSFODNN7EXAMPLE" not in sent_prompt
+    assert "[REDACTED_AWS_KEY]" in sent_prompt
+
+
 def test_cli_ask_command(tmp_path, monkeypatch):
     db_file = tmp_path / "test_cli_ask.db"
     config_file = tmp_path / "config.json"
