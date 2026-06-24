@@ -88,15 +88,20 @@ install_venv() {
     return 1
   fi
 
-  # Atomically swap — only now do we destroy the old one
-  rm -rf "$final_venv"
+  # Atomically swap: keep the old venv as a rollback target
+  local old_backup
+  old_backup=""
+  if [ -d "$final_venv" ]; then
+    old_backup="$(mktemp -d)/termstory-old"
+    mv "$final_venv" "$old_backup"
+  fi
   mv "$staging_venv" "$final_venv"
 
   # Fix shebangs: mv leaves pip-installed scripts pointing at staging path.
   # Use venv's own Python (binary-safe, handles non-UTF-8 and no-trailing-newline).
   # Replace ALL occurrences of the staging path, not just first-line shebangs —
   # pip/distlib may write #!/bin/sh wrappers with the interpreter on line 2.
-  "$final_venv/bin/python3" -c "
+  if ! "$final_venv/bin/python3" -c "
 import os, sys
 old = sys.argv[1].encode()
 new = sys.argv[2].encode()
@@ -113,7 +118,14 @@ for f in os.listdir(bin_dir):
     if old in content:
         with open(fp, 'wb') as fh:
             fh.write(content.replace(old, new))
-" "$staging_venv" "$final_venv" || { echo "  ⚠️  Shebang rewrite failed — venv may have stale paths."; return 1; }
+" "$staging_venv" "$final_venv"; then
+    echo "  ⚠️  Shebang rewrite failed — restoring old venv."
+    rm -rf "$final_venv"
+    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
+    return 1
+  fi
+  # Rewrite succeeded — discard old venv backup
+  [ -n "$old_backup" ] && rm -rf "$old_backup"
 
   echo ""
   echo "  ✅ Installed in virtualenv."
