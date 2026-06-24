@@ -113,7 +113,7 @@ for f in os.listdir(bin_dir):
     if old in content:
         with open(fp, 'wb') as fh:
             fh.write(content.replace(old, new))
-" "$staging_venv" "$final_venv"
+" "$staging_venv" "$final_venv" || { echo "  ⚠️  Shebang rewrite failed — venv may have stale paths."; return 1; }
 
   echo ""
   echo "  ✅ Installed in virtualenv."
