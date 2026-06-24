@@ -1,9 +1,9 @@
 #!/bin/bash
-# TermStory Installer v0.6.0
+# TermStory Installer v0.6.1
 
 set -euo pipefail
 
-echo "=== TermStory Installer v0.6.0 ==="
+echo "=== TermStory Installer v0.6.1 ==="
 
 # ── Find Python ────────────────────────────────────────────────────────────────
 PYTHON=""
@@ -49,35 +49,58 @@ pip_major_version() {
   "$PYTHON" -c "import pip; print(int(pip.__version__.split('.')[0]))" 2>/dev/null || echo "0"
 }
 
+# ── Helper: run pip and check its real exit code ───────────────────────────────
+pip_install() {
+  # Usage: pip_install <extra pip args...>
+  # Runs pip install with given args, outputs stderr, returns pip's exit code.
+  local pip_rc=0
+  "$PYTHON" -m pip install --quiet "$@" 2>&1 || pip_rc=$?
+  return $pip_rc
+}
+
 # ── Install strategies ─────────────────────────────────────────────────────────
 
 install_venv() {
-  local venv="$HOME/.termstory-venv"
-  echo "  Trying venv install at $venv ..."
+  local final_venv="$HOME/.termstory-venv"
+  local staging_venv
+  staging_venv=$(mktemp -d)/termstory-venv
+  echo "  Trying venv install at $final_venv ..."
 
-  # Remove a broken venv from a previous attempt
-  [ -d "$venv" ] && rm -rf "$venv"
-
-  if ! "$PYTHON" -m venv "$venv" 2>/dev/null; then
+  # Build replacement in a staging location so we never destroy a working venv
+  if ! "$PYTHON" -m venv "$staging_venv" 2>/dev/null; then
     echo "  venv creation failed (missing venv module?)"
+    rm -rf "$staging_venv"
     return 1
   fi
 
-  "$venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 | tail -3
+  local pip_rc=0
+  "$staging_venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
 
-  if "$venv/bin/python" -c "import termstory" 2>/dev/null; then
-    echo ""
-    echo "  ✅ Installed in virtualenv."
-    echo "  Add this line to your ~/.bashrc or ~/.zshrc, then open a new terminal:"
-    echo ""
-    echo '    export PATH="$HOME/.termstory-venv/bin:$PATH"'
-    echo ""
-    echo "  Then run:  termstory today"
-    return 0
+  if [ "$pip_rc" -ne 0 ]; then
+    echo "  pip install failed (exit $pip_rc)."
+    rm -rf "$staging_venv"
+    return 1
   fi
 
-  echo "  venv install didn't produce a working package."
-  return 1
+  if ! "$staging_venv/bin/python" -c "import termstory" 2>/dev/null; then
+    echo "  Package not importable after install."
+    rm -rf "$staging_venv"
+    return 1
+  fi
+
+  # Atomically swap — only now do we destroy the old one
+  rm -rf "$final_venv"
+  mv "$staging_venv" "$final_venv"
+
+  echo ""
+  echo "  ✅ Installed in virtualenv."
+  echo "  Run right now:"
+  echo "    $final_venv/bin/termstory today"
+  echo ""
+  echo "  For permanent access, add this line to ~/.bashrc or ~/.zshrc:"
+  echo '    export PATH="$HOME/.termstory-venv/bin:$PATH"'
+  echo ""
+  return 0
 }
 
 install_user() {
@@ -86,15 +109,22 @@ install_user() {
   local pip_ver
   pip_ver=$(pip_major_version)
 
+  local pip_rc=0
   # --break-system-packages introduced in pip 23.0 (needed on Debian/Ubuntu 23+)
   if [ "$pip_ver" -ge 23 ] 2>/dev/null; then
-    "$PYTHON" -m pip install --quiet --user --break-system-packages "$SRC_DIR" 2>&1 | tail -3
+    pip_install --user --break-system-packages "$SRC_DIR" || pip_rc=$?
   else
-    "$PYTHON" -m pip install --quiet --user "$SRC_DIR" 2>&1 | tail -3
+    pip_install --user "$SRC_DIR" || pip_rc=$?
   fi
 
-  if ! "$PYTHON" -c "import termstory" 2>/dev/null; then
-    echo "  User install didn't produce a working package."
+  if [ "$pip_rc" -ne 0 ]; then
+    echo "  pip install failed (exit $pip_rc)."
+    return 1
+  fi
+
+  # Verify import with the same Python that just installed it
+  if ! "$PYTHON" -c "import termstory; print(termstory.__version__)" 2>/dev/null; then
+    echo "  Package not importable after user install."
     return 1
   fi
 
