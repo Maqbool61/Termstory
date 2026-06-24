@@ -1,9 +1,12 @@
 import os
 import re
+import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Union, Callable
 from termstory.models import Command
 from termstory.timestamp_detective import TimestampDetective
+
+logger = logging.getLogger(__name__)
 
 try:
     ANSI_ESCAPE_PATTERN = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -55,7 +58,12 @@ def parse_zsh_history(
         with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             for line in f:
                 raw_lines.append(line)
-    except Exception:
+    except OSError as e:
+        logger.warning(
+            "Could not read Zsh history file %r: %s",
+            filepath,
+            e,
+        )
         return commands
 
     try:
