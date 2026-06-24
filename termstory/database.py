@@ -12,24 +12,27 @@ def _safe_rollback_and_reraise(conn, original_exception):
 
     Three things make this different from the inline pattern it replaces:
 
-    1. Uses bare `raise` (not `raise e`) so the original traceback is
-       preserved all the way to the caller, not clobbered to point at
-       the rollback site.
+    1. Preserves the original traceback by capturing it before any other
+       code can modify the exception object, then re-raising with the
+       captured traceback via ``with_traceback(tb)``.
     2. Wraps `conn.rollback()` in its own try/except so a broken
        connection (e.g. file deleted, connection timed out) cannot
        replace the original error with an unrelated OperationalError.
     3. Re-raises the *original* exception even if rollback itself fails,
        so the user sees the real cause instead of a misleading
        "database is locked"-style message that points at the wrong line.
+
+    Without #1, passing `e` to a helper clobbers the traceback because
+    Python 3 only preserves it for ``raise`` inside the original
+    ``except`` block — once you leave that scope (even into a function
+    call), ``raise e`` loses the traceback.
     """
+    tb = original_exception.__traceback__
     try:
         conn.rollback()
     except Exception:
-        # Swallow the rollback error and let the original propagate.
-        # The rollback being broken is informative but secondary to
-        # whatever originally raised.
         pass
-    raise original_exception
+    raise original_exception.with_traceback(tb)
 
 
 def safe_execute(cursor_or_conn, sql, *args, **kwargs):
