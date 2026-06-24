@@ -516,7 +516,7 @@ class Database:
                         # keeps stale metadata.
                         cursor.execute(
                             "UPDATE sessions SET end_time = ?, duration_seconds = ?, "
-                            "project_id = ?, tags = ? WHERE id = ?",
+                            "project_id = ?, tags = COALESCE(?, tags) WHERE id = ?",
                             (session.end_time, session.duration_seconds,
                              session.project_id, session.tags, db_id),
                         )
