@@ -10,13 +10,15 @@ Out of the box, TermStory is completely offline. The CLI parses your local `.zsh
 
 ### 2. The Optional AI Engine
 
-To make your timeline read like a true work diary, TermStory offers an **opt-in** AI categorization engine. When enabled, TermStory sends small batches of your terminal commands to an LLM (like Groq) to generate a short, human-readable summary of what you were working on.
+To make your timeline read like a true work diary, TermStory offers an **opt-in** AI categorization engine. When enabled, TermStory sends small batches of your terminal commands and git commit messages to an LLM (like Groq) to generate a short, human-readable summary of what you were working on.
+
+Three features send data to the LLM when enabled: **auto-summaries** (background, per session), the **Daily Chronicle** (`termstory chronicle`), and **natural language queries** (`termstory ask`). All three pass your history through the Local Sanitization Engine before making any network request.
 
 **If you enable this feature, we do not just blindly send your terminal logs to the cloud.** Your data must pass through our Local Sanitization Engine first.
 
 ### 3. The Local Sanitization Engine
 
-Before a single byte of data is sent to the AI API, TermStory runs your session commands through a rigid Python pre-processor right on your laptop.
+Before a single byte of data is sent to the AI API, TermStory runs your session commands and git commit messages through a rigid Python pre-processor right on your laptop.
 
 #### Open-Source Secret Detection
 
@@ -27,11 +29,13 @@ We do not reinvent the wheel when it comes to security. TermStory's redaction en
 
 #### Blacklisted Workflows
 
-If a session contains commands associated with deep infrastructure management or vault unlocking, TermStory aborts the AI request entirely. We will never send sessions containing commands like:
+If a session contains commands associated with deep infrastructure management or secret vaulting, TermStory removes that session's raw command list from the LLM context entirely and replaces it with `[REDACTED: Security/Authentication Operations]`. Session metadata (date, project name, duration, cached AI summaries) remains visible — only raw command text is withheld. We will never send raw commands from sessions containing patterns like:
 
 * `vault *`
 * `aws configure`
-* `kubectl create secret`
+* `gh auth`
+* `kubectl create secret *`
+* Raw token strings: `github_pat_*`, `sk_live_*`, `sk-ant-*`, `npm_*` (36-char)
 
 #### Hardcoded Redactions
 
@@ -40,6 +44,27 @@ Even if a command passes the Regex database, we aggressively strip common vector
 * Everything following an equals sign in environment variables (e.g., `export DB_PASS=[REDACTED]`).
 * Everything following common password flags (e.g., `mysql -u root -p[REDACTED]`).
 * IP addresses and fully qualified domain names (FQDNs).
+
+#### Custom Redaction Rules (`.termstoryignore`)
+
+If your workflows produce secrets with no recognizable prefix (e.g., a company-internal token format), you can teach TermStory's sanitizer about them without modifying source code.
+
+Place additional regex patterns — one per line — in either of these files:
+* `~/.termstoryignore`
+* `~/.termstory/.termstoryignore`
+
+Lines starting with `#` are treated as comments. Patterns match case-insensitively; matched strings are replaced with `[REDACTED_CUSTOM]`.
+
+**Example `~/.termstoryignore`:**
+```
+# Redact internal Vault paths
+secret/data/.*
+
+# Redact custom internal API token format
+acme_tok_[a-z0-9]{32}
+```
+
+> **Note:** Custom patterns are loaded once at TermStory startup. If you edit `.termstoryignore` while TermStory is running, restart it to apply the changes.
 
 ### 4. Run It Entirely Offline (Ollama Support)
 

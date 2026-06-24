@@ -17,3 +17,16 @@
 | **Ollama** | `llama3` | Fully local, no key needed |
 | **Custom** | any | Any OpenAI-compatible endpoint |
 
+### Pre-LLM Sanitization
+
+Every LLM call is preceded by a local sanitization pass through `termstory/sanitizer.py`.
+No raw session data reaches `_send_llm_request()` directly.
+
+**Commands** go through `sanitize_session_commands()`:
+1. If any command matches a blacklist pattern (`vault`, `aws configure`, `gh auth`, raw token strings, etc.), the function returns `(None, True)` — the calling code replaces the entire COMMANDS block with `"[REDACTED: Security/Authentication Operations]"`.
+2. Otherwise, every command string is run through `redact_command()` (named-prefix patterns → entropy heuristic → custom user rules) and the sanitized list is embedded in the prompt.
+
+**Git commit messages** pass through `redact_command()` individually before being appended to the prompt — the same regex pipeline used for commands, applied to commit text.
+
+This is enforced across all three AI-facing surfaces: `generate_ai_summary()`, `generate_daily_chronicle_prompt()` (both in `ai.py`), and `generate_answer()` (in `ask.py`). See `docs/privacy.md` for the complete redaction rule table.
+

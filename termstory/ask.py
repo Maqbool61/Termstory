@@ -259,6 +259,12 @@ def generate_answer(query: str, sessions: List[Session], ai_client) -> Optional[
     """
     Constructs a contextual Q&A prompt using the given query and matched sessions,
     and runs it against the configured LLM client.
+
+    Security: session commands are sanitized via sanitize_session_commands() before
+    being embedded in the prompt. Sessions containing blacklisted commands (vault,
+    aws configure, gh auth, raw token strings, etc.) have their entire COMMANDS block
+    replaced with '[REDACTED: Security/Authentication Operations]'.
+    Git commit messages are sanitized via redact_command() on each message string.
     """
     if not query.strip():
         return "Please provide a valid query."

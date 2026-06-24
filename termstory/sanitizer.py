@@ -4,6 +4,9 @@ import math
 from typing import List, Tuple, Optional
 
 # Load custom redaction patterns from .termstoryignore
+# IMPORTANT: This loads once at module import time (called at the bottom of this file).
+# Edits to ~/.termstoryignore take effect only after restarting TermStory — there is no
+# live-reload. This is a known limitation documented in SECURITY.md.
 CUSTOM_REDACTION_PATTERNS = []
 def load_custom_ignore_rules():
     global CUSTOM_REDACTION_PATTERNS
@@ -118,6 +121,12 @@ def calculate_entropy(s: str) -> float:
     return entropy
 
 def redact_high_entropy(cmd: str) -> str:
+    # NOTE: This is a best-effort heuristic, NOT a guarantee.
+    # Strings shorter than 24 chars, or with Shannon entropy <= 4.3 bits/char,
+    # will NOT be caught here — even if they are real secrets.
+    # Named-prefix patterns (AWS_KEY_PATTERN, OPENAI_API_KEY_PATTERN, etc.)
+    # defined above are the primary defense for known secret formats.
+    # For unknown/custom formats, add patterns to ~/.termstoryignore.
     def replacer(match):
         s = match.group(0)
         # Avoid redacting git commit hashes and normal text by requiring entropy > 4.3
