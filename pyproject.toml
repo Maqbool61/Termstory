@@ -4,17 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "termstory"
-version = "0.6.0"
+version = "0.6.1"
 description = "A personal developer memory engine that tracks terminal history to rebuild the story of your projects."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     { name = "TermStory Contributors" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -29,6 +28,9 @@ dependencies = [
 test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+]
+rag = [
+    "sentence-transformers>=2.2.0",
 ]
 
 [project.scripts]
