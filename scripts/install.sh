@@ -1,9 +1,9 @@
 #!/bin/bash
-# TermStory Installer v0.6.3
+# TermStory Installer v0.6.4
 
 set -euo pipefail
 
-echo "=== TermStory Installer v0.6.3 ==="
+echo "=== TermStory Installer v0.6.4 ==="
 
 # ── Find Python ────────────────────────────────────────────────────────────────
 PYTHON=""
@@ -62,6 +62,89 @@ pip_major_version() {
   "$PYTHON" -c "import pip; print(int(pip.__version__.split('.')[0]))" 2>/dev/null || echo "0"
 }
 
+# ── Shell RC integration ──────────────────────────────────────────────────────
+# Marker line so we can idempotently find/remove OUR export later.
+# The marker is a comment containing a stable token, so uninstall.sh can
+# regex-anchor and only ever touch our own insert (never user config).
+RC_MARKER="# Added by termstory installer"
+RC_EXPORT_LINE='export PATH="$HOME/.termstory-venv/bin:$PATH"'
+RC_FULL_BLOCK="${RC_MARKER}${RC_EXPORT_LINE}"
+
+# Returns 0 if the export AND its marker both appear in this file.
+rc_has_export() {
+  local rc="$1"
+  [ -f "$rc" ] || return 1
+  grep -Fqx "$RC_MARKER" "$rc" && grep -Fqx "$RC_EXPORT_LINE" "$rc"
+}
+
+# Pick the candidate RC file for the active shell, in order of preference.
+# Args: current_rc (set by caller), ordered list of candidate paths.
+rc_target_for_install() {
+  local shell_name
+  shell_name="${SHELL##*/}"
+
+  case "$shell_name" in
+    zsh)
+      [ -f "$HOME/.zshrc" ] && echo "$HOME/.zshrc" && return 0
+      ;;
+    bash)
+      # On macOS the user typically sources .bash_profile, not .bashrc.
+      # If .bashrc exists we prefer it for login shells too.
+      [ -f "$HOME/.bashrc" ] && echo "$HOME/.bashrc" && return 0
+      [ -f "$HOME/.bash_profile" ] && echo "$HOME/.bash_profile" && return 0
+      ;;
+  esac
+  return 1
+}
+
+# Append the marker+export block to a file, but only if not present.
+rc_append_export() {
+  local rc="$1"
+  if rc_has_export "$rc"; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "${RC_MARKER}"
+    echo "${RC_EXPORT_LINE}"
+  } >> "$rc"
+}
+
+offer_path_export() {
+  # Skip if running in a non-interactive context.
+  if ! [ -t 0 ]; then
+    return 0
+  fi
+
+  local target
+  if ! target=$(rc_target_for_install); then
+    return 0
+  fi
+
+  if rc_has_export "$target"; then
+    echo "  ✅ PATH export already present in $target"
+    return 0
+  fi
+
+  echo ""
+  printf '  Add export PATH="$HOME/.termstory-venv/bin:$PATH" to %s? [y/N] ' "$(basename "$target")"
+  local reply
+  # Read from /dev/tty so this works even when stdin was redirected.
+  read -r reply </dev/tty 2>/dev/null || reply=""
+  case "$reply" in
+    [Yy]|[Yy][Ee][Ss])
+      rc_append_export "$target"
+      echo "  ✅ Appended to $target"
+      echo "     Activate now:  source $target"
+      ;;
+    *)
+      echo "  Manual setup:"
+      echo "    $target (or ~/.bashrc / ~/.zshrc on different shells)"
+      echo "    $RC_EXPORT_LINE"
+      ;;
+  esac
+}
+
 # ── Install strategies ─────────────────────────────────────────────────────────
 
 install_venv() {
@@ -112,12 +195,11 @@ install_venv() {
 
   echo ""
   echo "  ✅ Installed in virtualenv."
-  echo "  Run right now:"
+  echo "  Run right now (no shell restart needed):"
   echo "    $venv/bin/termstory today"
   echo ""
-  echo "  For permanent access, add to ~/.bashrc or ~/.zshrc:"
-  echo '    export PATH="$HOME/.termstory-venv/bin:$PATH"'
-  echo ""
+
+  offer_path_export
 }
 
 install_user() {
