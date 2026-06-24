@@ -1718,7 +1718,7 @@ class MatrixDefragScreen(ModalScreen[None]):
             self.update_grid()
             if self.animation_timer:
                 self.animation_timer.stop()
-            self.set_timer(0.8, lambda t: self.call_after_refresh(self.dismiss))
+            self.set_timer(0.8, lambda: self.call_after_refresh(self.dismiss))
 
 
 class GhostTyperScreen(ModalScreen[None]):
@@ -1751,7 +1751,7 @@ class GhostTyperScreen(ModalScreen[None]):
     def on_mount(self) -> None:
         if not self.commands:
             self.query_one("#ghost-console").update("No commands available for playback.")
-            self.set_timer(1.2, lambda t: self.call_after_refresh(self.dismiss))
+            self.set_timer(1.2, lambda: self.call_after_refresh(self.dismiss))
             return
         self.start_typing_next_command()
         
@@ -1759,7 +1759,7 @@ class GhostTyperScreen(ModalScreen[None]):
         if self.current_cmd_idx >= len(self.commands):
             self.lines.append("\n[bold green]>> PLAYBACK COMPLETE.[/bold green]")
             self.update_console()
-            self.set_timer(1.0, lambda t: self.call_after_refresh(self.dismiss))
+            self.set_timer(1.0, lambda: self.call_after_refresh(self.dismiss))
             return
             
         self.current_char_idx = 0
