@@ -93,26 +93,26 @@ install_venv() {
   mv "$staging_venv" "$final_venv"
 
   # Fix shebangs: mv leaves pip-installed scripts pointing at staging path.
-  # Use venv's own Python (portable, handles & in paths, works on macOS and Linux).
+  # Use venv's own Python (binary-safe, handles non-UTF-8 and no-trailing-newline).
   "$final_venv/bin/python3" -c "
 import os, sys
 venv = sys.argv[1]
-py = os.path.join(venv, 'bin', 'python3')
+py = os.path.join(venv, 'bin', 'python3').encode()
 bin_dir = os.path.join(venv, 'bin')
 for f in os.listdir(bin_dir):
     fp = os.path.join(bin_dir, f)
     if not (os.path.isfile(fp) and os.access(fp, os.X_OK)):
         continue
     try:
-        with open(fp) as fh:
+        with open(fp, 'rb') as fh:
             content = fh.read()
     except OSError:
         continue
-    if content.startswith('#!') and 'python' in content.splitlines()[0]:
-        newline = '#!' + py
-        rest = content[content.index(chr(10)):]
-        with open(fp, 'w') as fh:
-            fh.write(newline + rest)
+    if content.startswith(b'#!') and b'python' in content.split(b'\n')[0]:
+        idx = content.find(b'\n')
+        rest = content[idx:] if idx != -1 else b''
+        with open(fp, 'wb') as fh:
+            fh.write(b'#!' + py + rest)
 " "$final_venv"
 
   echo ""
