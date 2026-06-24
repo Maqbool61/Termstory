@@ -1,9 +1,9 @@
 #!/bin/bash
-# TermStory Installer v0.6.2
+# TermStory Installer v0.6.3
 
 set -euo pipefail
 
-echo "=== TermStory Installer v0.6.2 ==="
+echo "=== TermStory Installer v0.6.3 ==="
 
 # ── Find Python ────────────────────────────────────────────────────────────────
 PYTHON=""
@@ -43,6 +43,7 @@ if [ ! -d "$SRC_DIR" ]; then
 fi
 
 # ── pip version helper ─────────────────────────────────────────────────────────
+# Spawns one Python subprocess; result used at most once per strategy.
 pip_major_version() {
   "$PYTHON" -c "import pip; print(int(pip.__version__.split('.')[0]))" 2>/dev/null || echo "0"
 }
@@ -53,39 +54,44 @@ install_venv() {
   local venv="$HOME/.termstory-venv"
   echo "  Trying venv install at $venv ..."
 
-  # Back up any existing venv so we can roll back on failure
-  local backup=""
+  # Back up any existing venv so we can roll back on failure.
+  # backup_dir holds the moved venv at "$backup_dir/termstory-venv".
+  local backup_dir=""
   if [ -d "$venv" ]; then
-    backup=$(mktemp -d)
-    mv "$venv" "$backup/termstory-venv"
+    backup_dir=$(mktemp -d)
+    mv "$venv" "$backup_dir/termstory-venv"
   fi
 
-  # On any failure below: restore backup (if any) and return 1
-  _venv_fail() {
-    local msg="$1"
+  # Inline rollback helper — bash does not support true nested functions;
+  # a "nested" definition leaks to global scope and loses access to locals.
+  _rollback_venv() {
+    local msg="$1" backup="$2"
     echo "  $msg"
     rm -rf "$venv"
-    [ -n "$backup" ] && mv "$backup/termstory-venv" "$venv"
-    [ -n "$backup" ] && rm -rf "$backup"
+    if [ -n "$backup" ]; then
+      mv "$backup/termstory-venv" "$venv"
+      rm -rf "$backup"
+    fi
     return 1
   }
 
   if ! "$PYTHON" -m venv "$venv" 2>/dev/null; then
-    _venv_fail "venv creation failed (is the venv module installed?)" || return 1
+    _rollback_venv "venv creation failed (is the venv module installed?)" "$backup_dir" || return 1
   fi
 
+  # Let pip write its own stderr to the terminal — don't redirect or silence errors.
   local pip_rc=0
-  "$venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
+  "$venv/bin/pip" install --quiet "$SRC_DIR" || pip_rc=$?
   if [ "$pip_rc" -ne 0 ]; then
-    _venv_fail "pip install failed (exit $pip_rc)." || return 1
+    _rollback_venv "pip install failed (exit $pip_rc)." "$backup_dir" || return 1
   fi
 
   if ! "$venv/bin/python" -c "import termstory" 2>/dev/null; then
-    _venv_fail "Package not importable after install." || return 1
+    _rollback_venv "Package not importable after install." "$backup_dir" || return 1
   fi
 
   # Success — discard backup
-  [ -n "$backup" ] && rm -rf "$backup"
+  [ -n "$backup_dir" ] && rm -rf "$backup_dir"
 
   echo ""
   echo "  ✅ Installed in virtualenv."
@@ -103,11 +109,12 @@ install_user() {
   local pip_ver pip_rc=0
   pip_ver=$(pip_major_version)
 
-  # --break-system-packages required on Debian/Ubuntu with pip >= 23
+  # --break-system-packages required on Debian/Ubuntu with pip >= 23.
+  # Let pip write its own stderr to the terminal on failure.
   if [ "$pip_ver" -ge 23 ]; then
-    "$PYTHON" -m pip install --quiet --user --break-system-packages "$SRC_DIR" 2>&1 || pip_rc=$?
+    "$PYTHON" -m pip install --quiet --user --break-system-packages "$SRC_DIR" || pip_rc=$?
   else
-    "$PYTHON" -m pip install --quiet --user "$SRC_DIR" 2>&1 || pip_rc=$?
+    "$PYTHON" -m pip install --quiet --user "$SRC_DIR" || pip_rc=$?
   fi
 
   if [ "$pip_rc" -ne 0 ]; then
@@ -115,13 +122,12 @@ install_user() {
     return 1
   fi
 
-  # Verify import — don't rely on __version__, it's not guaranteed to exist
   if ! "$PYTHON" -c "import termstory" 2>/dev/null; then
     echo "  Package not importable after user install."
     return 1
   fi
 
-  # Locate the installed binary (Linux ~/.local/bin or macOS Library path)
+  # Locate the installed binary (Linux ~/.local/bin or macOS Library path).
   local bin_path
   bin_path=$(find \
     "$HOME/.local/bin" \
