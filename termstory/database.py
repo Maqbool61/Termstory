@@ -1286,6 +1286,22 @@ class Database:
                 SELECT id, command, exit_code FROM commands;
             """)
 
+        # Migrate sessions_fts: drop and rebuild if column set drifted (e.g. older DBs
+        # where sessions_fts had content/session_id/project_id/timestamp instead of ai_summary).
+        # CREATE VIRTUAL TABLE IF NOT EXISTS doesn't update existing tables.
+        def _sessions_fts_columns():
+            try:
+                rows = cursor.execute("SELECT name FROM pragma_table_info('sessions_fts')").fetchall()
+                return {r[0] for r in rows} - {'content'}  # 'content' is shadow, ignore
+            except sqlite3.OperationalError:
+                return set()
+
+        if _sessions_fts_columns() != {'ai_summary'}:
+            cursor.execute("DROP TABLE IF EXISTS sessions_fts;")
+            cursor.execute("DROP TRIGGER IF EXISTS sessions_ai;")
+            cursor.execute("DROP TRIGGER IF EXISTS sessions_ad;")
+            cursor.execute("DROP TRIGGER IF EXISTS sessions_au;")
+
         # Create and populate sessions_fts virtual table
         cursor.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
