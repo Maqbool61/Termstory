@@ -141,7 +141,11 @@ def redact_command(cmd: str) -> str:
     cmd = re.sub(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:@/]+:[^\s:@/]+@[^\s]+', '[REDACTED_URI_CREDENTIALS]', cmd)
 
     # Natural-language password/secret literals (commit messages especially)
+    # Whitespace form: 'password Foo123!bar'
     cmd = re.sub(r'\b(password|passwd|pwd|secret)\s+[A-Za-z0-9!@#$%^&*()\-_=+,.?]{6,}', r'\1 [REDACTED]', cmd, flags=re.IGNORECASE)
+    # Separator form: 'password: Foo123!bar' or 'password = Foo123!bar'
+    # Skip flag-style (preceded by '-') so PASSWORD_FLAG_PATTERN owns that path.
+    cmd = re.sub(r'(?<!-)(?<![\w-])\b(password|passwd|pwd|secret)\b\s*[=:]\s*\S+', r'\1 [REDACTED]', cmd, flags=re.IGNORECASE)
     
     # 2. AWS Keys, Slack Tokens, and AI API Keys
     cmd = AWS_KEY_PATTERN.sub('[REDACTED_AWS_KEY]', cmd)
@@ -152,7 +156,16 @@ def redact_command(cmd: str) -> str:
     cmd = DEEPSEEK_API_KEY_PATTERN.sub('[REDACTED_DEEPSEEK_KEY]', cmd)
     cmd = OPENAI_API_KEY_PATTERN.sub('[REDACTED_OPENAI_KEY]', cmd)
     cmd = SPECIFIC_API_KEYS_PATTERN.sub(r'\1[REDACTED]', cmd)
-    
+
+    # Deterministic token prefixes that are NOT covered by entropy/heuristic
+    # detection — needed especially for commit-message paths that never
+    # enter the BLACKLIST_PATTERNS path.
+    cmd = re.sub(r'\bgh[psouhr]_[A-Za-z0-9]{20,}\b', '[REDACTED_GITHUB_PAT]', cmd)
+    cmd = re.sub(r'\bgithub_pat_[A-Za-z0-9_]+\b', '[REDACTED_GITHUB_PAT]', cmd)
+    cmd = re.sub(r'\bsk_live_[A-Za-z0-9_]+\b', '[REDACTED_TOKEN]', cmd)
+    cmd = re.sub(r'\bsk-(?:proj-|ant-api03-)?[A-Za-z0-9]{20,}\b', '[REDACTED_TOKEN]', cmd)
+    cmd = re.sub(r'\bnpm_[A-Za-z0-9]{36}\b', '[REDACTED_TOKEN]', cmd)
+
     # 3. Environment Variable Exports & High-risk Inline Env Vars
     cmd = ENV_EXPORT_PATTERN.sub(r'\1[REDACTED]', cmd)
     cmd = HIGH_RISK_ENV_PATTERN.sub(r'\1=[REDACTED]', cmd)

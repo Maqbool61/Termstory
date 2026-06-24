@@ -149,3 +149,21 @@ def test_blacklist_sk_false_positives():
     assert should_blacklist_command("export KEY=sk-proj-1234567890abcdef1234567890abcdef1234567890abcdef") is True
 
 
+def test_redact_command_handles_commit_message_form():
+    """Deterministic token-prefix / natural-language password patterns must
+    be redacted by redact_command() itself — they are NOT gated by the
+    BLACKLIST_PATTERNS path (which only runs for full commands)."""
+    from termstory.sanitizer import redact_command
+    # GitHub PAT-style token
+    assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in redact_command(
+        "fix token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    # Separator-form password in commit message
+    assert "ChroniclePassword123!" not in redact_command(
+        "rotate password: 而***d!"
+    )
+    # Whitespace-form password in commit message
+    assert "ChroniclePassword123!" not in redact_command(
+        "rotate password ***d!"
+    )
+
