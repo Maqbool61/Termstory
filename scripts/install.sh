@@ -62,69 +62,40 @@ pip_install() {
 
 install_venv() {
   local final_venv="$HOME/.termstory-venv"
-  local staging_venv
-  staging_venv=$(mktemp -d)/termstory-venv
+  local old_backup=""
   echo "  Trying venv install at $final_venv ..."
 
-  # Build replacement in a staging location so we never destroy a working venv
-  if ! "$PYTHON" -m venv "$staging_venv" 2>/dev/null; then
-    echo "  venv creation failed (missing venv module?)"
-    rm -rf "$staging_venv"
-    return 1
-  fi
-
-  local pip_rc=0
-  "$staging_venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
-
-  if [ "$pip_rc" -ne 0 ]; then
-    echo "  pip install failed (exit $pip_rc)."
-    rm -rf "$staging_venv"
-    return 1
-  fi
-
-  if ! "$staging_venv/bin/python" -c "import termstory" 2>/dev/null; then
-    echo "  Package not importable after install."
-    rm -rf "$staging_venv"
-    return 1
-  fi
-
-  # Atomically swap: keep the old venv as a rollback target
-  local old_backup
-  old_backup=""
+  # Backup existing venv for rollback
   if [ -d "$final_venv" ]; then
     old_backup="$(mktemp -d)/termstory-old"
     mv "$final_venv" "$old_backup"
   fi
-  mv "$staging_venv" "$final_venv"
 
-  # Fix shebangs: mv leaves pip-installed scripts pointing at staging path.
-  # Use venv's own Python (binary-safe, handles non-UTF-8 and no-trailing-newline).
-  # Replace ALL occurrences of the staging path, not just first-line shebangs —
-  # pip/distlib may write #!/bin/sh wrappers with the interpreter on line 2.
-  if ! "$final_venv/bin/python3" -c "
-import os, sys
-old = sys.argv[1].encode()
-new = sys.argv[2].encode()
-bin_dir = os.path.join(os.fsdecode(new), 'bin')
-for f in os.listdir(bin_dir):
-    fp = os.path.join(bin_dir, f)
-    if not (os.path.isfile(fp) and os.access(fp, os.X_OK)):
-        continue
-    try:
-        with open(fp, 'rb') as fh:
-            content = fh.read()
-    except OSError:
-        continue
-    if old in content:
-        with open(fp, 'wb') as fh:
-            fh.write(content.replace(old, new))
-" "$staging_venv" "$final_venv"; then
-    echo "  ⚠️  Shebang rewrite failed — restoring old venv."
+  # Build in-place so symlinks are correct from the start
+  if ! "$PYTHON" -m venv "$final_venv" 2>/dev/null; then
+    echo "  venv creation failed (missing venv module?)"
+    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
+    return 1
+  fi
+
+  local pip_rc=0
+  "$final_venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
+
+  if [ "$pip_rc" -ne 0 ]; then
+    echo "  pip install failed (exit $pip_rc)."
     rm -rf "$final_venv"
     [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
     return 1
   fi
-  # Rewrite succeeded — discard old venv backup
+
+  if ! "$final_venv/bin/python" -c "import termstory" 2>/dev/null; then
+    echo "  Package not importable after install."
+    rm -rf "$final_venv"
+    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
+    return 1
+  fi
+
+  # Success — discard old backup
   [ -n "$old_backup" ] && rm -rf "$old_backup"
 
   echo ""
