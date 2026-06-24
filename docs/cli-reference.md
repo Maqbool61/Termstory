@@ -7,6 +7,8 @@ Use semantic Q&A and search over your developer history. `termstory ask` retriev
 - `termstory ask "What did I work on last Monday?"`
 - `termstory ask "When did I fix the database deadlocks?"`
 
+Session commands and commit messages are sanitized through the local redaction engine before being sent to the LLM — no raw secrets leave your machine. See [Privacy Sanitizer](privacy.md) for details.
+
 ### 🔮 Predict (Pre-Cognitive Workspace)
 The pre-cognitive workspace predicts what project or workspace you will work on next based on historical transition probabilities and time-of-day patterns.
 - `termstory predict`

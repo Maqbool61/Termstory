@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-06-25
+
+### Security
+- **Secret redaction parity for `termstory ask` and Daily Chronicle**: `generate_answer()` in `ask.py` and `generate_daily_chronicle_prompt()` in `ai.py` now run session commands and git commit messages through the same local sanitizer (`sanitize_session_commands` / `redact_command`) already used by `generate_ai_summary()`. Previously, both functions built LLM prompts from completely raw, unredacted shell history and commit text.
+- **Commit message redaction across all AI surfaces**: `generate_ai_summary()` sanitized commands but never commit messages; fixed. Commit messages in all three AI-facing functions now pass through `redact_command()` before being embedded in any prompt.
+- **Defense-in-depth instruction in `termstory ask`**: The LLM prompt now includes an explicit instruction to never output credential values verbatim, as a secondary layer on top of the redaction pass.
+
 ## [0.6.0] - 2026-06-17
 ### Added
 - **RPG Classes Alter Ego (`termstory rpg-class`)**: Assigns and displays daily RPG class alter egos (e.g., *Regex Sorcerer*, *Docker Demolitionist*) based on shell history command distribution, including a custom LLM-generated biography.

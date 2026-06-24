@@ -289,7 +289,12 @@ def generate_ai_summary(
     commits: Optional[List[str]] = None,
     timeout: Optional[float] = None
 ) -> Optional[str]:
-    """Scrub commands and query the configured LLM API (Groq or Ollama) to generate a summary."""
+    """Scrub commands and query the configured LLM API (Groq or Ollama) to generate a summary.
+
+    Security: commands are sanitized via sanitize_session_commands() (blacklist gate +
+    per-command redact_command()). Git commit messages are sanitized via redact_command().
+    Neither raw commands nor raw commit text is ever passed to _send_llm_request().
+    """
     if not commands:
         return None
         
@@ -482,7 +487,13 @@ def generate_daily_chronicle_prompt(
     sessions: List,
     projects: List
 ) -> str:
-    """Generate the Daily Chronicle AI prompt detailing sessions, commands, and inferred gaps."""
+    """Generate the Daily Chronicle AI prompt detailing sessions, commands, and inferred gaps.
+
+    Security: session commands are sanitized via sanitize_session_commands() (blacklist
+    gate + per-command redact_command()). Git commit messages are sanitized via
+    redact_command(). Neither raw command text nor raw commit text is embedded in the
+    returned prompt string.
+    """
     import os
     from datetime import datetime
     from termstory.models import format_duration
