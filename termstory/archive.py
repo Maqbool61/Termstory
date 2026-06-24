@@ -3,6 +3,7 @@ import sqlite3
 import re
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
+from termstory.database import _safe_rollback_and_reraise
 from termstory.database import Database
 from termstory.date_utils import get_current_time
 
@@ -152,7 +153,16 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
                 SELECT start_time, end_time, duration_seconds, project_id, created_at, tags, ai_summary
                 FROM main.sessions WHERE id = ?
             """, (old_sess_id,))
-            start_time, end_time, duration_seconds, old_proj_id, created_at, tags, ai_summary = cursor.fetchone()
+            session_row = cursor.fetchone()
+            if session_row is None:
+                # Defense-in-depth: within the BEGIN IMMEDIATE transaction
+                # (line 73) no concurrent writer can delete the row between
+                # inventory and copy, so this guard is structurally unreachable.
+                # Present as a safety net against future transaction refactors
+                # or pre-existing data corruption.
+                print(f"  Skipping session id={old_sess_id} (not found)")
+                continue
+            start_time, end_time, duration_seconds, old_proj_id, created_at, tags, ai_summary = session_row
 
             new_proj_id = project_id_map.get(old_proj_id)
 
@@ -195,7 +205,11 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
                 SELECT timestamp, message, cleaned_message, project_id, created_at
                 FROM main.commits WHERE hash = ?
             """, (c_hash,))
-            c_ts, c_msg, c_cl_msg, old_c_proj_id, c_ca = cursor.fetchone()
+            commit_row = cursor.fetchone()
+            if commit_row is None:
+                print(f"  Skipping commit hash={c_hash} (not found, may have been deleted)")
+                continue
+            c_ts, c_msg, c_cl_msg, old_c_proj_id, c_ca = commit_row
             new_c_proj_id = project_id_map.get(old_c_proj_id)
             cursor.execute("""
                 INSERT OR IGNORE INTO archive.commits (hash, timestamp, message, cleaned_message, project_id, created_at)
@@ -267,8 +281,7 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
 
         conn.commit()
     except Exception as e:
-        conn.rollback()
-        raise e
+        _safe_rollback_and_reraise(conn, e)
     finally:
         try:
             conn.execute("DETACH DATABASE archive")
