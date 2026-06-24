@@ -6,7 +6,7 @@ import threading
 import time
 import socket
 from typing import List, Optional, Dict
-from termstory.sanitizer import sanitize_session_commands
+from termstory.sanitizer import sanitize_session_commands, redact_command
 
 logger = logging.getLogger(__name__)
 _local_ai_state = threading.local()
@@ -314,7 +314,8 @@ def generate_ai_summary(
     commits_block = ""
     if commits:
         unique_commits = sorted(list(set(commits)))
-        commits_block = "\nGit Commit Messages:\n" + "\n".join(f"- {c}" for c in unique_commits)
+        sanitized_commits = [redact_command(c) for c in unique_commits]
+        commits_block = "\nGit Commit Messages:\n" + "\n".join(f"- {c}" for c in sanitized_commits)
         
     context_str = ""
     db_context = _get_project_context_from_db(project_name)
@@ -574,15 +575,25 @@ def generate_daily_chronicle_prompt(
             chrono_lines.append("GIT COMMITS:")
             for c in s.commits:
                 msg = c.get("cleaned_message") or c.get("message") or ""
-                chrono_lines.append(f"  - {msg}")
+                chrono_lines.append(f"  - {redact_command(msg)}")
                 
         # Commands (filter noise, include exit codes for failed ones)
         cmds = [cmd for cmd in s.commands if not _is_noise_command(cmd.command)]
         if cmds:
+            # Blacklist check runs on the FULL non-noise list — a sensitive
+            # op at index N>15 must still gate the session, not just edit the
+            # sanitized text replacement for the first 15 displayed.
+            all_non_noise_cmds = [c.command for c in cmds]
+            _, is_blacklisted = sanitize_session_commands(all_non_noise_cmds)
             chrono_lines.append("COMMANDS:")
-            for cmd in cmds[:15]:
-                exit_str = f" (Exit Code {cmd.exit_code})" if cmd.exit_code != 0 else ""
-                chrono_lines.append(f"  - {cmd.command}{exit_str}")
+            if is_blacklisted:
+                chrono_lines.append("  - [REDACTED: Security/Authentication Operations]")
+            else:
+                shown = cmds[:15]
+                sanitized_cmds, _ = sanitize_session_commands([c.command for c in shown])
+                for cmd, sc in zip(shown, sanitized_cmds):
+                    exit_str = f" (Exit Code {cmd.exit_code})" if cmd.exit_code != 0 else ""
+                    chrono_lines.append(f"  - {sc}{exit_str}")
                 
         chrono_lines.append("")
         

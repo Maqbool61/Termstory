@@ -16,7 +16,7 @@ def test_blacklist_commands():
 
 def test_redact_environment_variables():
     # Exports
-    assert redact_command("export DATABASE_URL=mysql://root:pass@localhost/db") == "export DATABASE_URL=[REDACTED]"
+    assert redact_command("export DATABASE_URL=mysql://root:pass@localhost/db") == "export DATABASE_URL=[REDACTED_URI_CREDENTIALS]"
     assert redact_command("export AWS_SECRET_ACCESS_KEY='secret key'") == "export AWS_SECRET_ACCESS_KEY=[REDACTED]"
     assert redact_command('export PORT="8080"') == 'export PORT=[REDACTED]'
     
@@ -148,4 +148,22 @@ def test_blacklist_sk_false_positives():
     # But a real sk- key prefix should still be blacklisted
     assert should_blacklist_command("export KEY=sk-proj-1234567890abcdef1234567890abcdef1234567890abcdef") is True
 
+
+def test_redact_command_handles_commit_message_form():
+    """Deterministic token-prefix / natural-language password patterns must
+    be redacted by redact_command() itself — they are NOT gated by the
+    BLACKLIST_PATTERNS path (which only runs for full commands)."""
+    from termstory.sanitizer import redact_command
+    # GitHub PAT-style token
+    assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in redact_command(
+        "fix token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    # Separator-form password in commit message
+    assert "ChroniclePassword123!" not in redact_command(
+        "rotate password: 而***d!"
+    )
+    # Whitespace-form password in commit message
+    assert "ChroniclePassword123!" not in redact_command(
+        "rotate password ***d!"
+    )
 

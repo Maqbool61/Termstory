@@ -467,3 +467,210 @@ def test_generate_executive_review_alias(monkeypatch):
 
 
 
+
+def test_ai_summary_redacts_secrets_in_commit_messages(monkeypatch):
+    called = []
+    def mock_urlopen(req, timeout=None):
+        called.append(req)
+        body = json.loads(req.data.decode("utf-8"))
+        content = body["messages"][0]["content"]
+        assert "AKIAIOSFODNN7EXAMPLE" not in content
+        assert "[REDACTED_AWS_KEY]" in content
+        resp_payload = {"choices": [{"message": {"content": "Summary."}}]}
+        return MockResponse(json.dumps(resp_payload).encode("utf-8"))
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    res = generate_ai_summary(
+        commands=["git commit -m fix"],
+        api_key="test-key",
+        api_base_url="https://api.openai.com/v1",
+        model_name="gpt-4o",
+        provider="openai",
+        commits=["fix: hardcode aws key AKIAIOSFODNN7EXAMPLE for staging deploy"]
+    )
+    assert len(called) == 1
+    assert res == "Summary."
+
+
+def test_daily_chronicle_redacts_secrets_in_commands_and_commits():
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+    cmd = Command(timestamp=1780460000, command="export DB_PASSWORD=SuperSecret123")
+    s = Session(
+        id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000, project_id=1,
+        commands=[cmd],
+        commits=[{"message": "fix: hardcode aws key AKIAIOSFODNN7EXAMPLE for staging deploy"}],
+    )
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000,
+                last_seen=1780461000, session_count=1, total_time=1000)
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p]
+    )
+    assert "SuperSecret123" not in prompt
+    assert "AKIAIOSFODNN7EXAMPLE" not in prompt
+    assert "[REDACTED]" in prompt
+    assert "[REDACTED_AWS_KEY]" in prompt
+
+
+def test_daily_chronicle_blacklists_sensitive_session():
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+    cmds = [
+        Command(timestamp=1780460000, command="vault read secret/data/prod"),
+        Command(timestamp=1780460010, command="git push origin main"),
+    ]
+    s = Session(id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000,
+                project_id=1, commands=cmds)
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000,
+                last_seen=1780461000, session_count=1, total_time=1000)
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p]
+    )
+    assert "vault read secret/data/prod" not in prompt
+    assert "git push origin main" not in prompt
+    assert "Security/Authentication Operations" in prompt
+
+
+
+def test_ai_summary_redacts_secrets_in_commit_messages(monkeypatch):
+    """generate_ai_summary must redact secrets from commit messages, same as it
+    already does for commands."""
+    called = []
+
+    def mock_urlopen(req, timeout=None):
+        called.append(req)
+        body = json.loads(req.data.decode())
+        content = body["messages"][0]["content"]
+        aws_key = "AKIAIOSFODNN7EXAMPLE"
+        assert aws_key not in content
+        assert "REDACTED_AWS_KEY" in content
+        resp_payload = {"choices": [{"message": {"content": "Summary."}}]}
+        return MockResponse(json.dumps(resp_payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen)
+
+    res = generate_ai_summary(
+        commands=["git commit -m 'fix'"],
+        api_key="test-key",
+        api_base_url="https://api.openai.com/v1",
+        model_name="gpt-4o",
+        provider="openai",
+        commits=["fix: hardcode aws key AKIAIOSFODNN7EXAMPLE for staging deploy"]
+    )
+    assert len(called) == 1
+    assert res == "Summary."
+
+
+def test_daily_chronicle_redacts_secrets_in_commands_and_commits():
+    """generate_daily_chronicle_prompt must not leak raw secrets from commands
+    or commit messages."""
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+
+    cmd = Command(timestamp=1780460000, command="export DB_PASSWORD=SuperSecret123")
+    s = Session(
+        id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000, project_id=1,
+        commands=[cmd],
+        commits=[{"message": "fix: hardcode aws key AKIAIOSFODNN7EXAMPLE for staging deploy"}],
+    )
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000,
+                last_seen=1780461000, session_count=1, total_time=1000)
+
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p]
+    )
+
+    assert "SuperSecret123" not in prompt
+    aws_key = "AKIAIOSFODNN7EXAMPLE"
+    assert aws_key not in prompt
+    assert "REDACTED" in prompt
+    assert "REDACTED_AWS_KEY" in prompt
+
+
+def test_daily_chronicle_blacklists_sensitive_session():
+    """A session with a blacklisted command should have its COMMANDS section
+    gated entirely, mirroring generate_answer's behavior."""
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+
+    cmds = [
+        Command(timestamp=1780460000, command="vault read secret/data/prod"),
+        Command(timestamp=1780460010, command="git push origin main"),
+    ]
+    s = Session(id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000,
+                project_id=1, commands=cmds)
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000,
+                last_seen=1780461000, session_count=1, total_time=1000)
+
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p]
+    )
+
+    assert "vault read secret/data/prod" not in prompt
+    assert "git push origin main" not in prompt
+    assert "Security/Authentication Operations" in prompt
+
+
+def test_daily_chronicle_blacklists_when_sensitive_op_beyond_display_slice():
+    """Blacklist check must see commands beyond the first 15 displayed
+    ones — a sensitive op at index 20 must still gate the session."""
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+
+    cmds = [
+        Command(timestamp=1780460000 + i, command=f"git checkout branch{i}")
+        for i in range(20)
+    ]
+    cmds.append(Command(timestamp=1780460100, command="vault read secret/data/prod"))
+    s = Session(id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000,
+                project_id=1, commands=cmds)
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000,
+                last_seen=1780461000, session_count=1, total_time=1000)
+
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p],
+    )
+
+    # First 15 displayed must NOT appear — session is gated
+    assert "git checkout branch0" not in prompt
+    assert "Security/Authentication Operations" in prompt
+
+
+def test_daily_chronicle_redacts_uri_credential_and_password_literal():
+    """URI credentials scheme://user:password@host and 'password <value>' must be redacted."""
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+
+    cmd = Command(timestamp=1780460000,
+                  command="psql postgresql://chronicle:ChroniclePassword123!@localhost/db")
+    s = Session(
+        id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000, project_id=1,
+        commands=[cmd],
+        commits=[{"message": "rotate password ChroniclePassword123! in vault"}],
+    )
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000,
+                last_seen=1780461000, session_count=1, total_time=1000)
+
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p],
+    )
+
+    assert "ChroniclePassword123!" not in prompt
+
