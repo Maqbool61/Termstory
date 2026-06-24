@@ -94,11 +94,13 @@ install_venv() {
 
   # Fix shebangs: mv leaves pip-installed scripts pointing at staging path.
   # Use venv's own Python (binary-safe, handles non-UTF-8 and no-trailing-newline).
+  # Replace ALL occurrences of the staging path, not just first-line shebangs —
+  # pip/distlib may write #!/bin/sh wrappers with the interpreter on line 2.
   "$final_venv/bin/python3" -c "
 import os, sys
-venv = sys.argv[1]
-py = os.path.join(venv, 'bin', 'python3').encode()
-bin_dir = os.path.join(venv, 'bin')
+old = sys.argv[1].encode()
+new = sys.argv[2].encode()
+bin_dir = os.path.join(os.fsdecode(new), 'bin')
 for f in os.listdir(bin_dir):
     fp = os.path.join(bin_dir, f)
     if not (os.path.isfile(fp) and os.access(fp, os.X_OK)):
@@ -108,12 +110,10 @@ for f in os.listdir(bin_dir):
             content = fh.read()
     except OSError:
         continue
-    if content.startswith(b'#!') and b'python' in content.split(b'\n')[0]:
-        idx = content.find(b'\n')
-        rest = content[idx:] if idx != -1 else b''
+    if old in content:
         with open(fp, 'wb') as fh:
-            fh.write(b'#!' + py + rest)
-" "$final_venv"
+            fh.write(content.replace(old, new))
+" "$staging_venv" "$final_venv"
 
   echo ""
   echo "  ✅ Installed in virtualenv."
