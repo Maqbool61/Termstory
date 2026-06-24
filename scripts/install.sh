@@ -1,9 +1,9 @@
 #!/bin/bash
-# TermStory Installer v0.6.1
+# TermStory Installer v0.6.2
 
 set -euo pipefail
 
-echo "=== TermStory Installer v0.6.1 ==="
+echo "=== TermStory Installer v0.6.2 ==="
 
 # ── Find Python ────────────────────────────────────────────────────────────────
 PYTHON=""
@@ -21,12 +21,10 @@ echo "  Python: $($PYTHON --version)"
 echo "  pip:    $($PYTHON -m pip --version 2>&1 | awk '{print $1, $2}')"
 
 # ── Download & extract ─────────────────────────────────────────────────────────
-WORK_DIR=$(mktemp -d)          # avoid shadowing the $TMPDIR env var
+WORK_DIR=$(mktemp -d)
 
-cleanup() {
-  rm -rf "$WORK_DIR"
-}
-trap cleanup EXIT              # always clean up, success or failure
+cleanup() { rm -rf "$WORK_DIR"; }
+trap cleanup EXIT
 
 echo "  Downloading TermStory..."
 if ! curl -fsSL \
@@ -49,78 +47,67 @@ pip_major_version() {
   "$PYTHON" -c "import pip; print(int(pip.__version__.split('.')[0]))" 2>/dev/null || echo "0"
 }
 
-# ── Helper: run pip and check its real exit code ───────────────────────────────
-pip_install() {
-  # Usage: pip_install <extra pip args...>
-  # Runs pip install with given args, outputs stderr, returns pip's exit code.
-  local pip_rc=0
-  "$PYTHON" -m pip install --quiet "$@" 2>&1 || pip_rc=$?
-  return $pip_rc
-}
-
 # ── Install strategies ─────────────────────────────────────────────────────────
 
 install_venv() {
-  local final_venv="$HOME/.termstory-venv"
-  local old_backup=""
-  echo "  Trying venv install at $final_venv ..."
+  local venv="$HOME/.termstory-venv"
+  echo "  Trying venv install at $venv ..."
 
-  # Backup existing venv for rollback
-  if [ -d "$final_venv" ]; then
-    old_backup="$(mktemp -d)/termstory-old"
-    mv "$final_venv" "$old_backup"
+  # Back up any existing venv so we can roll back on failure
+  local backup=""
+  if [ -d "$venv" ]; then
+    backup=$(mktemp -d)
+    mv "$venv" "$backup/termstory-venv"
   fi
 
-  # Build in-place so symlinks are correct from the start
-  if ! "$PYTHON" -m venv "$final_venv" 2>/dev/null; then
-    echo "  venv creation failed (missing venv module?)"
-    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
+  # On any failure below: restore backup (if any) and return 1
+  _venv_fail() {
+    local msg="$1"
+    echo "  $msg"
+    rm -rf "$venv"
+    [ -n "$backup" ] && mv "$backup/termstory-venv" "$venv"
+    [ -n "$backup" ] && rm -rf "$backup"
     return 1
+  }
+
+  if ! "$PYTHON" -m venv "$venv" 2>/dev/null; then
+    _venv_fail "venv creation failed (is the venv module installed?)" || return 1
   fi
 
   local pip_rc=0
-  "$final_venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
-
+  "$venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
   if [ "$pip_rc" -ne 0 ]; then
-    echo "  pip install failed (exit $pip_rc)."
-    rm -rf "$final_venv"
-    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
-    return 1
+    _venv_fail "pip install failed (exit $pip_rc)." || return 1
   fi
 
-  if ! "$final_venv/bin/python" -c "import termstory" 2>/dev/null; then
-    echo "  Package not importable after install."
-    rm -rf "$final_venv"
-    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
-    return 1
+  if ! "$venv/bin/python" -c "import termstory" 2>/dev/null; then
+    _venv_fail "Package not importable after install." || return 1
   fi
 
-  # Success — discard old backup
-  [ -n "$old_backup" ] && rm -rf "$old_backup"
+  # Success — discard backup
+  [ -n "$backup" ] && rm -rf "$backup"
 
   echo ""
   echo "  ✅ Installed in virtualenv."
   echo "  Run right now:"
-  echo "    $final_venv/bin/termstory today"
+  echo "    $venv/bin/termstory today"
   echo ""
-  echo "  For permanent access, add this line to ~/.bashrc or ~/.zshrc:"
+  echo "  For permanent access, add to ~/.bashrc or ~/.zshrc:"
   echo '    export PATH="$HOME/.termstory-venv/bin:$PATH"'
   echo ""
-  return 0
 }
 
 install_user() {
   echo "  Trying --user install..."
 
-  local pip_ver
+  local pip_ver pip_rc=0
   pip_ver=$(pip_major_version)
 
-  local pip_rc=0
-  # --break-system-packages introduced in pip 23.0 (needed on Debian/Ubuntu 23+)
-  if [ "$pip_ver" -ge 23 ] 2>/dev/null; then
-    pip_install --user --break-system-packages "$SRC_DIR" || pip_rc=$?
+  # --break-system-packages required on Debian/Ubuntu with pip >= 23
+  if [ "$pip_ver" -ge 23 ]; then
+    "$PYTHON" -m pip install --quiet --user --break-system-packages "$SRC_DIR" 2>&1 || pip_rc=$?
   else
-    pip_install --user "$SRC_DIR" || pip_rc=$?
+    "$PYTHON" -m pip install --quiet --user "$SRC_DIR" 2>&1 || pip_rc=$?
   fi
 
   if [ "$pip_rc" -ne 0 ]; then
@@ -128,20 +115,18 @@ install_user() {
     return 1
   fi
 
-  # Verify import with the same Python that just installed it
-  if ! "$PYTHON" -c "import termstory; print(termstory.__version__)" 2>/dev/null; then
+  # Verify import — don't rely on __version__, it's not guaranteed to exist
+  if ! "$PYTHON" -c "import termstory" 2>/dev/null; then
     echo "  Package not importable after user install."
     return 1
   fi
 
   # Locate the installed binary (Linux ~/.local/bin or macOS Library path)
   local bin_path
-  bin_path=$(
-    find \
-      "$HOME/.local/bin" \
-      "$HOME/Library/Python" \
-      -name "termstory" -type f 2>/dev/null | head -1
-  ) || true
+  bin_path=$(find \
+    "$HOME/.local/bin" \
+    "$HOME/Library/Python" \
+    -name "termstory" -type f 2>/dev/null | head -1) || true
 
   echo ""
   echo "  ✅ Installed."
@@ -153,7 +138,6 @@ install_user() {
     echo "  Binary not found in standard locations."
     echo "  Run:    $PYTHON -m termstory.cli today"
   fi
-  return 0
 }
 
 # ── Try venv first, then user, then give up ────────────────────────────────────
