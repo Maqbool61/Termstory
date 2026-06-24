@@ -1,9 +1,9 @@
 #!/bin/bash
-# TermStory Installer v0.6.1
+# TermStory Installer v0.6.3
 
 set -euo pipefail
 
-echo "=== TermStory Installer v0.6.1 ==="
+echo "=== TermStory Installer v0.6.3 ==="
 
 # ── Find Python ────────────────────────────────────────────────────────────────
 PYTHON=""
@@ -20,13 +20,25 @@ fi
 echo "  Python: $($PYTHON --version)"
 echo "  pip:    $($PYTHON -m pip --version 2>&1 | awk '{print $1, $2}')"
 
+# ── Global state ──────────────────────────────────────────────────────────────
+# The EXIT trap reads this to restore a stranded backup if the script is
+# interrupted mid-install (SIGTERM, SIGINT, unchecked error).
+_BACKUP_DIR=""
+_SRC_DIR=""
+
 # ── Download & extract ─────────────────────────────────────────────────────────
-WORK_DIR=$(mktemp -d)          # avoid shadowing the $TMPDIR env var
+WORK_DIR=$(mktemp -d)
 
 cleanup() {
-  rm -rf "$WORK_DIR"
+  # Restore stranded venv backup if script was aborted mid-install
+  if [ -n "$_BACKUP_DIR" ] && [ -d "$_BACKUP_DIR" ]; then
+    rm -rf "$HOME/.termstory-venv"
+    [ -d "$_BACKUP_DIR/termstory-venv" ] && mv "$_BACKUP_DIR/termstory-venv" "$HOME/.termstory-venv"
+    rm -rf "$_BACKUP_DIR"
+  fi
+  rm -rf "${WORK_DIR:-}"
 }
-trap cleanup EXIT              # always clean up, success or failure
+trap cleanup EXIT
 
 echo "  Downloading TermStory..."
 if ! curl -fsSL \
@@ -45,111 +57,81 @@ if [ ! -d "$SRC_DIR" ]; then
 fi
 
 # ── pip version helper ─────────────────────────────────────────────────────────
+# Spawns one Python subprocess; result used at most once per strategy.
 pip_major_version() {
   "$PYTHON" -c "import pip; print(int(pip.__version__.split('.')[0]))" 2>/dev/null || echo "0"
-}
-
-# ── Helper: run pip and check its real exit code ───────────────────────────────
-pip_install() {
-  # Usage: pip_install <extra pip args...>
-  # Runs pip install with given args, outputs stderr, returns pip's exit code.
-  local pip_rc=0
-  "$PYTHON" -m pip install --quiet "$@" 2>&1 || pip_rc=$?
-  return $pip_rc
 }
 
 # ── Install strategies ─────────────────────────────────────────────────────────
 
 install_venv() {
-  local final_venv="$HOME/.termstory-venv"
-  local staging_venv
-  staging_venv=$(mktemp -d)/termstory-venv
-  echo "  Trying venv install at $final_venv ..."
+  local venv="$HOME/.termstory-venv"
+  echo "  Trying venv install at $venv ..."
 
-  # Build replacement in a staging location so we never destroy a working venv
-  if ! "$PYTHON" -m venv "$staging_venv" 2>/dev/null; then
-    echo "  venv creation failed (missing venv module?)"
-    rm -rf "$staging_venv"
-    return 1
+  # Back up any existing venv so we can roll back on failure.
+  # backup_dir holds the moved venv at "$backup_dir/termstory-venv".
+  # Register cleanup so an interrupted/aborted script doesn't strand it.
+  local backup_dir=""
+  if [ -d "$venv" ]; then
+    backup_dir=$(mktemp -d)
+    mv "$venv" "$backup_dir/termstory-venv"
+    # Register with global EXIT trap — restores on abort/interrupt
+    _BACKUP_DIR="$backup_dir"
   fi
 
+  # Inline rollback helper — bash does not support true nested functions;
+  # a "nested" definition leaks to global scope and loses access to locals.
+  _rollback_venv() {
+    local msg="$1" backup="$2"
+    echo "  $msg"
+    rm -rf "$venv"
+    if [ -n "$backup" ]; then
+      mv "$backup/termstory-venv" "$venv"
+      rm -rf "$backup"
+    fi
+    return 1
+  }
+
+  if ! "$PYTHON" -m venv "$venv" 2>/dev/null; then
+    _rollback_venv "venv creation failed (is the venv module installed?)" "$backup_dir" || return 1
+  fi
+
+  # Let pip write its own stderr to the terminal — don't redirect or silence errors.
   local pip_rc=0
-  "$staging_venv/bin/pip" install --quiet "$SRC_DIR" 2>&1 || pip_rc=$?
-
+  "$venv/bin/pip" install --quiet "$SRC_DIR" || pip_rc=$?
   if [ "$pip_rc" -ne 0 ]; then
-    echo "  pip install failed (exit $pip_rc)."
-    rm -rf "$staging_venv"
-    return 1
+    _rollback_venv "pip install failed (exit $pip_rc)." "$backup_dir" || return 1
   fi
 
-  if ! "$staging_venv/bin/python" -c "import termstory" 2>/dev/null; then
-    echo "  Package not importable after install."
-    rm -rf "$staging_venv"
-    return 1
+  if ! "$venv/bin/python" -c "import termstory" 2>/dev/null; then
+    _rollback_venv "Package not importable after install." "$backup_dir" || return 1
   fi
 
-  # Atomically swap: keep the old venv as a rollback target
-  local old_backup
-  old_backup=""
-  if [ -d "$final_venv" ]; then
-    old_backup="$(mktemp -d)/termstory-old"
-    mv "$final_venv" "$old_backup"
-  fi
-  mv "$staging_venv" "$final_venv"
-
-  # Fix shebangs: mv leaves pip-installed scripts pointing at staging path.
-  # Use venv's own Python (binary-safe, handles non-UTF-8 and no-trailing-newline).
-  # Replace ALL occurrences of the staging path, not just first-line shebangs —
-  # pip/distlib may write #!/bin/sh wrappers with the interpreter on line 2.
-  if ! "$final_venv/bin/python3" -c "
-import os, sys
-old = sys.argv[1].encode()
-new = sys.argv[2].encode()
-bin_dir = os.path.join(os.fsdecode(new), 'bin')
-for f in os.listdir(bin_dir):
-    fp = os.path.join(bin_dir, f)
-    if not (os.path.isfile(fp) and os.access(fp, os.X_OK)):
-        continue
-    try:
-        with open(fp, 'rb') as fh:
-            content = fh.read()
-    except OSError:
-        continue
-    if old in content:
-        with open(fp, 'wb') as fh:
-            fh.write(content.replace(old, new))
-" "$staging_venv" "$final_venv"; then
-    echo "  ⚠️  Shebang rewrite failed — restoring old venv."
-    rm -rf "$final_venv"
-    [ -n "$old_backup" ] && mv "$old_backup" "$final_venv"
-    return 1
-  fi
-  # Rewrite succeeded — discard old venv backup
-  [ -n "$old_backup" ] && rm -rf "$old_backup"
+  # Success — discard backup
+  [ -n "$backup_dir" ] && rm -rf "$backup_dir" && _BACKUP_DIR=""
 
   echo ""
   echo "  ✅ Installed in virtualenv."
   echo "  Run right now:"
-  echo "    $final_venv/bin/termstory today"
+  echo "    $venv/bin/termstory today"
   echo ""
-  echo "  For permanent access, add this line to ~/.bashrc or ~/.zshrc:"
+  echo "  For permanent access, add to ~/.bashrc or ~/.zshrc:"
   echo '    export PATH="$HOME/.termstory-venv/bin:$PATH"'
   echo ""
-  return 0
 }
 
 install_user() {
   echo "  Trying --user install..."
 
-  local pip_ver
+  local pip_ver pip_rc=0
   pip_ver=$(pip_major_version)
 
-  local pip_rc=0
-  # --break-system-packages introduced in pip 23.0 (needed on Debian/Ubuntu 23+)
-  if [ "$pip_ver" -ge 23 ] 2>/dev/null; then
-    pip_install --user --break-system-packages "$SRC_DIR" || pip_rc=$?
+  # --break-system-packages required on Debian/Ubuntu with pip >= 23.
+  # Let pip write its own stderr to the terminal on failure.
+  if [ "$pip_ver" -ge 23 ]; then
+    "$PYTHON" -m pip install --quiet --user --break-system-packages "$SRC_DIR" || pip_rc=$?
   else
-    pip_install --user "$SRC_DIR" || pip_rc=$?
+    "$PYTHON" -m pip install --quiet --user "$SRC_DIR" || pip_rc=$?
   fi
 
   if [ "$pip_rc" -ne 0 ]; then
@@ -157,20 +139,26 @@ install_user() {
     return 1
   fi
 
-  # Verify import with the same Python that just installed it
-  if ! "$PYTHON" -c "import termstory; print(termstory.__version__)" 2>/dev/null; then
-    echo "  Package not importable after user install."
+  # Verify the imported module is actually from this install target,
+  # not a stale system or site-packages copy.
+  if ! "$PYTHON" -c "
+import sys, os, site
+user_site = site.getusersitepackages()
+import termstory
+fp = os.path.realpath(termstory.__file__)
+if not fp.startswith(os.path.realpath(user_site)):
+    sys.exit(1)
+" 2>/dev/null; then
+    echo "  Package not importable from user site-packages after install."
     return 1
   fi
 
-  # Locate the installed binary (Linux ~/.local/bin or macOS Library path)
+  # Locate the installed binary (Linux ~/.local/bin or macOS Library path).
   local bin_path
-  bin_path=$(
-    find \
-      "$HOME/.local/bin" \
-      "$HOME/Library/Python" \
-      -name "termstory" -type f 2>/dev/null | head -1
-  ) || true
+  bin_path=$(find \
+    "$HOME/.local/bin" \
+    "$HOME/Library/Python" \
+    -name "termstory" -type f 2>/dev/null | head -1) || true
 
   echo ""
   echo "  ✅ Installed."
@@ -182,7 +170,6 @@ install_user() {
     echo "  Binary not found in standard locations."
     echo "  Run:    $PYTHON -m termstory.cli today"
   fi
-  return 0
 }
 
 # ── Try venv first, then user, then give up ────────────────────────────────────
