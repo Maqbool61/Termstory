@@ -4,7 +4,7 @@ import sqlite3
 from collections import Counter
 from typing import List, Optional, Dict, Tuple
 
-from termstory.models import Session, Command
+from termstory.models import Session
 from termstory.config import get_db_path
 from termstory.ai import _send_llm_request
 from termstory.sanitizer import sanitize_session_commands, redact_command

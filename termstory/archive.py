@@ -1,8 +1,7 @@
-import os
 import sqlite3
 import re
 from datetime import datetime, timedelta, date
-from typing import Dict, Any, List, Optional
+from typing import Dict
 from termstory.database import _safe_rollback_and_reraise
 from termstory.database import Database
 from termstory.date_utils import get_current_time
@@ -244,18 +243,18 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
         # FTS5 updates
         if has_main_fts5:
             if session_ids:
-                cursor.execute(f"""
+                cursor.execute("""
                     DELETE FROM main.search_index 
                     WHERE type = 'command' 
                       AND ref_id IN (SELECT CAST(id AS TEXT) FROM main.sessions WHERE start_time < ?)
                 """, (cutoff_timestamp,))
-                cursor.execute(f"""
+                cursor.execute("""
                     DELETE FROM main.search_index 
                     WHERE type = 'session_summary' 
                       AND ref_id IN (SELECT CAST(id AS TEXT) FROM main.sessions WHERE start_time < ?)
                 """, (cutoff_timestamp,))
             if commit_hashes:
-                cursor.execute(f"""
+                cursor.execute("""
                     DELETE FROM main.search_index 
                     WHERE type = 'commit' 
                       AND ref_id IN (SELECT hash FROM main.commits WHERE timestamp < ?)
