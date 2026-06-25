@@ -319,10 +319,17 @@ async def test_tui_onboarding_click_disabled():
 
         app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
         async with app.run_test() as pilot:
-            # Press 'ctrl+d' (Keep Local Only shortcut) on OnboardingScreen
+            # Press 'ctrl+d' (Keep Local Only shortcut) on OnboardingScreen.
+            # Pause so call_after_refresh(self.dismiss, self.config) fires
+            # before assertions — without it, dismiss hasn't run yet and
+            # the test exits mid-callback, hanging the runner.
             await pilot.press("ctrl+d")
+            await pilot.pause()
             assert app.config["has_seen_onboarding"] is True
             assert app.config["ai_enabled"] is False
+            # Drain any pending workers/timers so the test context exits cleanly.
+            app.workers.cancel_all()
+            await pilot.pause()
 
 
 @pytest.mark.asyncio
@@ -334,9 +341,13 @@ async def test_tui_onboarding_mouse_click():
 
         app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
         async with app.run_test(size=(120, 50)) as pilot:
-            # Click the disable button on OnboardingScreen
-            button = app.screen.query_one("#btn-disable-ai")
-            button.press()
+            # Click the disable button on OnboardingScreen.
+            # Use pilot.click() rather than button.press() — pilot runs the
+            # event in Textual's event-loop context, so call_after_refresh
+            # fires cleanly. Direct button.press() from outside the loop
+            # raises "Token var active_message_pump was created in a
+            # different Context".
+            await pilot.click("#btn-disable-ai")
             await pilot.pause()
             assert app.config["has_seen_onboarding"] is True
             assert app.config["ai_enabled"] is False
@@ -669,32 +680,34 @@ async def test_tui_help_screen():
         
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
-            
+
             # Help screen is not showing initially
             assert not any(screen.__class__.__name__ == "HelpScreen" for screen in app.screen_stack)
-            
+
             # Press ?
             await pilot.press("?")
             await pilot.pause()
-            
+
             # Help screen should be showing now
             from termstory.tui import HelpScreen
             help_screen = app.screen
             assert isinstance(help_screen, HelpScreen)
-            
-            # Dismiss using close button
-            help_screen.query_one("#btn-close-help").press()
+
+            # Dismiss using close button — use pilot.click so the event
+            # runs in Textual's event-loop context. Direct press() from
+            # outside the loop has caused ScreenError in newer Textual.
+            await pilot.click("#btn-close-help")
             await pilot.pause()
-            
+
             # Help screen should be dismissed
             assert not isinstance(app.screen, HelpScreen)
-            
+
             # Open it again
             await pilot.press("?")
             await pilot.pause()
             help_screen = app.screen
             assert isinstance(help_screen, HelpScreen)
-            
+
             # Dismiss using ESC key
             await pilot.press("escape")
             await pilot.pause()
@@ -705,7 +718,7 @@ async def test_tui_help_screen():
             await pilot.pause()
             help_screen = app.screen
             assert isinstance(help_screen, HelpScreen)
-            
+
             # Dismiss using q key
             await pilot.press("q")
             await pilot.pause()
@@ -768,8 +781,13 @@ async def test_reset_action():
         
         async with app.run_test() as pilot:
             assert app.was_reset is False
+            # Open reset confirmation
             await pilot.press("ctrl+shift+h")
+            await pilot.pause()
+            # Confirm — pause first so call_after_refresh(self.dismiss, True)
+            # fires before assertions / app.exit() deadlock
             await pilot.press("y")
+            await pilot.pause()
             assert app.was_reset is True
 
 
@@ -794,17 +812,24 @@ async def test_tui_month_no_activity_feed():
         app.auto_select_today_on_mount = False
         
         async with app.run_test() as pilot:
+            # Schedule via call_after_refresh so render_wrapped_view runs in
+            # the app's event-loop context, not the test's. Direct call from
+            # the test caused "Token var active_message_pump was created in
+            # a different Context" because the @work thread worker tried to
+            # call_from_thread from outside the loop.
             canvas = app.query_one("#details-canvas")
-            canvas.render_wrapped_view("June 2026", "2026-06", [s], [p])
+            app.call_after_refresh(canvas.render_wrapped_view, "June 2026", "2026-06", [s], [p])
             await pilot.pause()
-            
+            await pilot.pause()
+
             from textual.css.query import NoMatches
             with pytest.raises(NoMatches):
                 canvas.query_one(".feed-container")
-                
-            canvas.render_time_summary("📊 Overall Dashboard Summary", [s], [p], timeframe_id="overall", timeframe_type="overall")
+
+            app.call_after_refresh(canvas.render_time_summary, "📊 Overall Dashboard Summary", [s], [p], timeframe_id="overall", timeframe_type="overall")
             await pilot.pause()
-            
+            await pilot.pause()
+
             feed = canvas.query_one(".feed-container")
             assert feed is not None
 
@@ -1103,6 +1128,7 @@ async def test_tui_worker_cancellation(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(30)
 async def test_tui_batch_8_cyberpunk_animations(monkeypatch):
     """Test the newly added Batch 8 features (Matrix Defrag, Ghost Typer, Heatmap Pulse)."""
     import tempfile
@@ -1140,6 +1166,11 @@ async def test_tui_batch_8_cyberpunk_animations(monkeypatch):
             await pilot.press("d")
             await pilot.pause()
             assert isinstance(app.screen, MatrixDefragScreen)
+            # Stop the animation timer before dismissing to ensure cleanup
+            # happens within the test context — otherwise the timer keeps
+            # firing and prevents run_test() exit (CI hangs).
+            if app.screen.animation_timer is not None:
+                app.screen.animation_timer.stop()
             # Wait for animation to finish or manually dismiss
             app.screen.dismiss()
             await pilot.pause()
@@ -1165,6 +1196,12 @@ async def test_tui_batch_8_cyberpunk_animations(monkeypatch):
                 await pilot.press("g")
                 await pilot.pause()
                 assert isinstance(app.screen, GhostTyperScreen)
+                # Stop the typing_timer before dismissing — same pattern as
+                # MatrixDefragScreen animation_timer fix above. Without this,
+                # the 30ms set_interval keeps firing after dismiss and prevents
+                # run_test() exit (proven CI hang).
+                if getattr(app.screen, "typing_timer", None) is not None:
+                    app.screen.typing_timer.stop()
                 # Dismiss
                 app.screen.dismiss()
                 await pilot.pause()
