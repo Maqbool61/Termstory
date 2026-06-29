@@ -1,0 +1,50 @@
+area_labels:
+  area/ai:
+    - "termstory/ai.py"
+    - "termstory/ask.py"
+    - "termstory/rag.py"
+    - "termstory/predict.py"
+    - "termstory/insights.py"
+    - "termstory/hermes_obs.py"
+  area/storage:
+    - "termstory/database.py"
+    - "termstory/archive.py"
+    - "termstory/backup.py"
+    - "termstory/models.py"
+    - "termstory/mcp_snapshot.py"
+  area/cli:
+    - "termstory/cli.py"
+    - "termstory/__main__.py"
+    - "main.py"
+    - "termstory/session.py"
+  area/tui:
+    - "termstory/tui.py"
+    - "termstory/formatter.py"
+    - "termstory/replay.py"
+    - "skills/**"
+  area/search:
+    - "termstory/search.py"
+    - "termstory/tags.py"
+    - "termstory/timeline.py"
+    - "termstory/parser.py"
+    - "termstory/sanitizer.py"
+  area/config:
+    - "termstory/config.py"
+    - "pyproject.toml"
+    - "requirements.txt"
+    - "setup.py"
+    - "MANIFEST.in"
+  kind/docs:
+    - "docs/**"
+    - "**/*.md"
+    - "README*"
+    - "CHANGELOG*"
+    - "CONTRIBUTING*"
+  kind/ci:
+    - ".github/**"
+    - "scripts/**"
+    - "*.sh"
+  kind/tests:
+    - "tests/**"
+    - "tests/conftest.py"
+    - "tests/fixtures/**"
