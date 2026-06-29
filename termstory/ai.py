@@ -15,8 +15,15 @@ _local_ai_state = threading.local()
 _circuit_breaker_lock = threading.Lock()
 _circuit_breaker_failures = 0
 _circuit_breaker_open_until = 0.0
-MAX_FAILURES = 3
-COOLDOWN_SECONDS = 60.0
+
+# Module-level defaults — used when config is unavailable.
+_DEFAULT_MAX_FAILURES: int = 3
+_DEFAULT_COOLDOWN_SECONDS: float = 60.0
+
+# In-process cache for the configurable limits.
+# None = re-read from config on the next LLM request.
+_cb_max_failures: Optional[int] = None
+_cb_cooldown_seconds: Optional[float] = None
 
 def reset_circuit_breaker() -> None:
     """Reset the global circuit breaker state. Primarily used for testing."""
@@ -24,6 +31,66 @@ def reset_circuit_breaker() -> None:
     with _circuit_breaker_lock:
         _circuit_breaker_failures = 0
         _circuit_breaker_open_until = 0.0
+
+def _get_cb_limits() -> tuple[int, float]:
+    """Return (max_failures, cooldown_seconds) from the in-process cache or config.
+
+    Each limit is resolved independently, so a partial override via
+    :func:`reload_circuit_breaker_config` (e.g. only ``max_failures``) is
+    preserved while the other slot is still read from config.
+
+    Values are clamped to sane minimums (≥ 1 / ≥ 1.0) so a zero or negative
+    entry in ``config.json`` cannot silently disable the circuit breaker.
+
+    The entire check-and-set is held under ``_circuit_breaker_lock`` so a
+    concurrent :func:`reload_circuit_breaker_config` call cannot race and
+    overwrite an explicit override with a stale config value.
+
+    Call :func:`reload_circuit_breaker_config` with no arguments to flush
+    the cache and re-read both values from ``config.json``.
+    """
+    global _cb_max_failures, _cb_cooldown_seconds
+
+    with _circuit_breaker_lock:
+        if _cb_max_failures is None:
+            try:
+                from termstory.config import load_config
+                cfg = load_config()
+                _cb_max_failures = max(1, int(cfg.get("ai_max_failures", _DEFAULT_MAX_FAILURES)))
+            except Exception:
+                _cb_max_failures = _DEFAULT_MAX_FAILURES
+
+        if _cb_cooldown_seconds is None:
+            try:
+                from termstory.config import load_config
+                cfg = load_config()
+                _cb_cooldown_seconds = max(1.0, float(cfg.get("ai_cooldown_seconds", _DEFAULT_COOLDOWN_SECONDS)))
+            except Exception:
+                _cb_cooldown_seconds = _DEFAULT_COOLDOWN_SECONDS
+
+        return _cb_max_failures, _cb_cooldown_seconds
+
+def reload_circuit_breaker_config(
+    max_failures: Optional[int] = None,
+    cooldown_seconds: Optional[float] = None,
+) -> None:
+    """Update the live circuit breaker limits without restarting the process.
+
+    Call with **no arguments** to flush the cached values so they are
+    re-read from ``config.json`` on the next LLM request.  Pass explicit
+    values to set one-off in-process overrides (useful in tests and for
+    operator tooling).
+
+    Args:
+        max_failures: Override for the number of consecutive timeouts before
+            the circuit opens.  ``None`` (default) flushes the cached value.
+        cooldown_seconds: Override for the cooldown duration in seconds.
+            ``None`` (default) flushes the cached value.
+    """
+    global _cb_max_failures, _cb_cooldown_seconds
+    with _circuit_breaker_lock:
+        _cb_max_failures = max(1, max_failures) if max_failures is not None else None
+        _cb_cooldown_seconds = max(1.0, cooldown_seconds) if cooldown_seconds is not None else None
 
 def get_last_ai_error() -> Optional[str]:
     """Retrieve the last AI call error message, if any, for the current thread."""
@@ -149,6 +216,7 @@ def _send_llm_request(
     
     max_retries = 3
     backoff = 1.0
+    max_failures, cooldown_seconds = _get_cb_limits()
     
     for attempt in range(max_retries + 1):
         if attempt > 0:
@@ -201,8 +269,8 @@ def _send_llm_request(
             # Half-open socket zombie or severe hang detected
             with _circuit_breaker_lock:
                 _circuit_breaker_failures += 1
-                if _circuit_breaker_failures >= MAX_FAILURES:
-                    _circuit_breaker_open_until = time.time() + COOLDOWN_SECONDS
+                if _circuit_breaker_failures >= max_failures:
+                    _circuit_breaker_open_until = time.time() + cooldown_seconds
             _local_ai_state.last_error = f"Strict timeout exceeded ({timeout}s). LLM process hung."
             continue
             
@@ -222,8 +290,8 @@ def _send_llm_request(
             if is_timeout:
                 with _circuit_breaker_lock:
                     _circuit_breaker_failures += 1
-                    if _circuit_breaker_failures >= MAX_FAILURES:
-                        _circuit_breaker_open_until = time.time() + COOLDOWN_SECONDS
+                    if _circuit_breaker_failures >= max_failures:
+                        _circuit_breaker_open_until = time.time() + cooldown_seconds
             else:
                 with _circuit_breaker_lock:
                     _circuit_breaker_failures = 0
@@ -929,4 +997,31 @@ def generate_rpg_bio(
     )
 
 
+def __getattr__(name: str) -> object:
+    """Backward-compatible access to deprecated module-level constants.
 
+    ``MAX_FAILURES`` and ``COOLDOWN_SECONDS`` were removed in favour of
+    :func:`reload_circuit_breaker_config`.  Reading them still works but
+    emits a :class:`DeprecationWarning`; they always return the current
+    default, not any live override.  Mutating them has no effect on the
+    circuit breaker — use :func:`reload_circuit_breaker_config` instead.
+    """
+    import warnings
+
+    if name == "MAX_FAILURES":
+        warnings.warn(
+            "termstory.ai.MAX_FAILURES is deprecated and has no effect on the "
+            "circuit breaker. Use reload_circuit_breaker_config() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _DEFAULT_MAX_FAILURES
+    if name == "COOLDOWN_SECONDS":
+        warnings.warn(
+            "termstory.ai.COOLDOWN_SECONDS is deprecated and has no effect on "
+            "the circuit breaker. Use reload_circuit_breaker_config() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _DEFAULT_COOLDOWN_SECONDS
+    raise AttributeError(f"module 'termstory.ai' has no attribute {name!r}")
