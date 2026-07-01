@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shlex
@@ -15,6 +16,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.markup import escape
 
+logger = logging.getLogger(__name__)
 
 DISPLAY_NAMES = {
     "git": "Git",
@@ -67,7 +69,7 @@ def extract_files_from_commands(commands: List[Command]) -> Dict[str, int]:
     for cmd in commands:
         try:
             tokens = shlex.split(cmd.command)
-        except Exception:
+        except ValueError:
             tokens = cmd.command.split()
             
         if not tokens:
@@ -976,7 +978,7 @@ def get_operator_handle() -> str:
         if stored_user:
             return f"@{stored_user.strip().lstrip('@')}"
     except Exception:
-        pass
+        logger.debug("Could not load config for operator handle", exc_info=True)
 
     import subprocess
     try:
@@ -985,7 +987,7 @@ def get_operator_handle() -> str:
         if user:
             return f"@{user}"
     except Exception:
-        pass
+        logger.debug("Could not get github.user from git config", exc_info=True)
     try:
         res = subprocess.run(["git", "config", "remote.origin.url"], capture_output=True, text=True, check=False)
         url = res.stdout.strip()
@@ -994,14 +996,14 @@ def get_operator_handle() -> str:
             if match:
                 return f"@{match.group(1)}"
     except Exception:
-        pass
+        logger.debug("Could not get remote origin URL from git config", exc_info=True)
     try:
         res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=False)
         name = res.stdout.strip()
         if name:
             return f"@{name.replace(' ', '-').lower()}"
     except Exception:
-        pass
+        logger.debug("Could not get user.name from git config", exc_info=True)
     try:
         import getpass
         return f"@{getpass.getuser()}"
@@ -1193,9 +1195,9 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
                 with _avatar_lock:
                     _avatar_cache[cache_key] = lines
                 return lines
-        except Exception:
-            pass
-            
+        except OSError:
+            logger.warning("Failed to read avatar from disk cache", exc_info=True)
+
     with _avatar_lock:
         if cache_key in _avatar_fetching:
             return get_fallback_avatar_padded(width, height)
@@ -1298,9 +1300,10 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
                 os.makedirs(db_dir, exist_ok=True)
                 with open(disk_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(lines))
-            except Exception:
-                pass
+            except OSError:
+                logger.warning("Failed to save avatar to disk cache", exc_info=True)
         except Exception:
+            logger.exception("Avatar fetch failed, using fallback")
             with _avatar_lock:
                 _avatar_cache[cache_key] = get_fallback_avatar_padded(width, height)
         finally:
@@ -1310,7 +1313,7 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
                 try:
                     on_resolved()
                 except Exception:
-                    pass
+                    logger.exception("on_resolved callback failed")
                     
     threading.Thread(target=fetch_thread, daemon=True).start()
     return get_fallback_avatar_padded(width, height)
