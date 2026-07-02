@@ -159,11 +159,12 @@ from termstory.formatter import get_operator_handle, get_github_avatar_ascii, ex
 
 def test_logging_on_exception():
     with patch('termstory.formatter.logger') as mock_logger:
-        with patch('subprocess.run', side_effect=Exception("subprocess failed")):
-            try:
-                get_operator_handle()
-            except Exception:
-                pass
+        with patch('termstory.config.load_config', return_value={}):
+            with patch('subprocess.run', side_effect=Exception("subprocess failed")):
+                try:
+                    get_operator_handle()
+                except Exception:
+                    pass
     assert mock_logger.method_calls, "No log calls were made when an exception occurred"
 
 def test_oserror_handling(caplog):
@@ -181,15 +182,6 @@ def test_oserror_handling(caplog):
         time.sleep(0.1)
     assert "Failed to read avatar from disk cache" in caplog.text
 
-def test_debug_logs_config_unavailable(caplog):
-    with caplog.at_level(logging.DEBUG):
-        with patch('configparser.ConfigParser.read', return_value=[]):
-            with patch('subprocess.run', side_effect=Exception("git not found")):
-                get_operator_handle()
-    assert "Could not load config" in caplog.text or "git config" in caplog.text
-
-
-
 def test_valueerror_fallback():
     from collections import namedtuple
     Command = namedtuple('Command', ['command'])
@@ -197,3 +189,10 @@ def test_valueerror_fallback():
     commands = [Command(malformed)]
     result = extract_files_from_commands(commands)
     assert isinstance(result, dict)
+
+def test_debug_logs_config_unavailable(caplog):
+    with caplog.at_level(logging.DEBUG):
+        with patch('termstory.config.load_config', return_value={}):
+            with patch('subprocess.run', side_effect=Exception("git not found")):
+                get_operator_handle()
+    assert "Could not load config" in caplog.text or "git config" in caplog.text
