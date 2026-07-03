@@ -1,5 +1,6 @@
 import json
 import logging
+import sqlite3
 import urllib.request
 import urllib.error
 import threading
@@ -9,6 +10,7 @@ from typing import List, Optional, Dict
 from termstory.sanitizer import sanitize_session_commands, redact_command
 
 logger = logging.getLogger(__name__)
+
 _local_ai_state = threading.local()
 
 # Circuit Breaker Configuration
@@ -115,13 +117,9 @@ def _get_project_context_from_db(project_name: str) -> Optional[str]:
         row = cursor.fetchone()
         if row:
             return row[0]
-    except Exception:
-        logger.warning(
-            "_get_project_context_from_db: failed to fetch project context for %r; "
-            "returning None.",
-            project_name,
-            exc_info=True,
-        )
+    except (sqlite3.DatabaseError, OSError, RuntimeError):
+        logger.warning("_get_project_context_from_db: failed to fetch project context for %r; returning None.", project_name, exc_info=True)
+        return None
     finally:
         if conn is not None:
             conn.close()
@@ -139,12 +137,8 @@ def _get_all_active_project_contexts() -> List[tuple]:
         cursor.execute("SELECT name, project_context FROM projects WHERE project_context IS NOT NULL AND project_context != ''")
         rows = cursor.fetchall()
         return rows
-    except Exception:
-        logger.warning(
-            "_get_all_active_project_contexts: failed to fetch project contexts; "
-            "returning empty list.",
-            exc_info=True,
-        )
+    except (sqlite3.DatabaseError, OSError, ImportError, RuntimeError):
+        logger.warning("_get_all_active_project_contexts: failed to fetch project contexts; returning empty list.", exc_info=True)
         return []
     finally:
         if conn is not None:
@@ -247,7 +241,8 @@ def _send_llm_request(
                     if result.startswith("'") and result.endswith("'"):
                         result = result[1:-1]
                     result_box.append(result)
-            except Exception as e:
+            except (urllib.error.URLError, OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError, RuntimeError, ConnectionError) as e:
+                logger.exception("LLM request failed.")
                 error_box.append(e)
 
         worker_thread = threading.Thread(target=_worker, daemon=True)
@@ -319,12 +314,14 @@ def _send_llm_request(
                                 if len(body_str) > 200:
                                     body_str = body_str[:200] + "..."
                                 _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
-                        except Exception:
+                        except (json.JSONDecodeError, ValueError, AttributeError):
+                            logger.exception("Failed to parse LLM HTTP error response JSON.")
                             body_str = " ".join(raw_body.split())
                             if len(body_str) > 200:
                                 body_str = body_str[:200] + "..."
                             _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
-                except Exception:
+                except (OSError, UnicodeDecodeError, ValueError):
+                    logger.exception("Failed to read HTTP error body from LLM response.")
                     reason_str = " ".join(str(e.reason).split())
                     if len(reason_str) > 200:
                         reason_str = reason_str[:200] + "..."
@@ -574,7 +571,8 @@ def generate_daily_chronicle_prompt(
         template_path = os.path.join(os.path.dirname(__file__), "templates", "example_daily_chronicle.txt")
         with open(template_path, "r", encoding="utf-8") as f:
             example_text = f.read().strip()
-    except Exception:
+    except (OSError, UnicodeDecodeError):
+        logger.exception("Failed to load daily chronicle template example.")
         example_text = (
             "🌅 ACT I: THE OPENING ARCHITECTURE [09:15 - 12:02]\n"
             "You opened the terminal and immediately focused on core package wiring.\n"
