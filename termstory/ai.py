@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import urllib.request
 import urllib.error
+import http.client
 import threading
 import time
 import socket
@@ -137,7 +138,7 @@ def _get_all_active_project_contexts() -> List[tuple]:
         cursor.execute("SELECT name, project_context FROM projects WHERE project_context IS NOT NULL AND project_context != ''")
         rows = cursor.fetchall()
         return rows
-    except (sqlite3.DatabaseError, OSError, ImportError, RuntimeError):
+    except (sqlite3.DatabaseError, OSError, RuntimeError):
         logger.warning("_get_all_active_project_contexts: failed to fetch project contexts; returning empty list.", exc_info=True)
         return []
     finally:
@@ -241,8 +242,7 @@ def _send_llm_request(
                     if result.startswith("'") and result.endswith("'"):
                         result = result[1:-1]
                     result_box.append(result)
-            except (urllib.error.URLError, OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError, RuntimeError, ConnectionError) as e:
-                logger.exception("LLM request failed.")
+            except (urllib.error.URLError, OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError, RuntimeError, ConnectionError, http.client.HTTPException) as e:
                 error_box.append(e)
 
         worker_thread = threading.Thread(target=_worker, daemon=True)
@@ -343,6 +343,8 @@ def _send_llm_request(
             return escape(result_box[0])
         return None
 
+    if error_box:
+        logger.warning("LLM request failed after %d attempts: %s", max_retries + 1, error_box[-1])
     return None
 
 def generate_ai_summary(
