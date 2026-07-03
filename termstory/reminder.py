@@ -22,7 +22,7 @@ def load_reminders() -> List[Dict]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
         logger.exception("Failed to load reminders from %s", path)
         return []
 
