@@ -63,3 +63,9 @@ area_labels:
     - "tests/fixtures/**"
     - "tests/stress/**"
     - "termstory/testing.py"
+
+# Termstory uses the star-gate (authors must star the repo to use Miku commands).
+star_gate: true
+
+# Auto-assign the PR author when they open a PR.
+pr_auto_assign: true
