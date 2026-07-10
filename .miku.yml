@@ -69,3 +69,6 @@ star_gate: true
 
 # Auto-assign the PR author when they open a PR.
 pr_auto_assign: true
+
+# ECSOC26 event support (disabled for termstory)
+ecsoc26: false
