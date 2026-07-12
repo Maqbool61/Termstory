@@ -856,6 +856,11 @@ def perform_reset(auto_confirm: bool = False, dry_run: bool = False):
         return
 
     if not auto_confirm:
+        # A non-interactive shell can't answer the prompt; refuse instead of
+        # silently aborting with a success exit code.
+        if not sys.stdin.isatty():
+            console.print("[bold red]Refusing to reset in a non-interactive shell without --yes.[/bold red]")
+            raise typer.Exit(code=1)
         response = Prompt.ask("\nAre you sure you want to delete all TermStory data?", choices=["y", "yes", "n", "no"], default="n")
         if response.lower() not in ["y", "yes"]:
             console.print("[yellow]Reset aborted.[/yellow]")
