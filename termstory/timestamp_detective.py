@@ -1147,9 +1147,9 @@ class TimestampDetective:
                 if result is not None:
                     return result
             except Exception as e:
-                logger.debug("Detector error: %s", e)
-                # Silently swallow individual detector errors to keep the
-                # pipeline running for the remaining commands
+                logger.debug("Detector %s error: %s", detector.__name__, e)
+                # Keep the pipeline running for remaining detectors
+                continue
                 continue
         return None
 
