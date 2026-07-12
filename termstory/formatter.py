@@ -982,26 +982,32 @@ def get_operator_handle() -> str:
 
     import subprocess
     try:
-        res = subprocess.run(["git", "config", "github.user"], capture_output=True, text=True, check=False)
+        res = subprocess.run(["git", "config", "github.user"], capture_output=True, text=True, check=False, timeout=5)
         user = res.stdout.strip()
         if user:
             return f"@{user}"
+    except subprocess.TimeoutExpired:
+        logger.debug("Timed out getting github.user from git config", exc_info=True)
     except Exception:
         logger.debug("Could not get github.user from git config", exc_info=True)
     try:
-        res = subprocess.run(["git", "config", "remote.origin.url"], capture_output=True, text=True, check=False)
+        res = subprocess.run(["git", "config", "remote.origin.url"], capture_output=True, text=True, check=False, timeout=5)
         url = res.stdout.strip()
         if url:
             match = re.search(r'github\.com[:/]([^/]+)/', url)
             if match:
                 return f"@{match.group(1)}"
+    except subprocess.TimeoutExpired:
+        logger.debug("Timed out getting remote origin URL from git config", exc_info=True)
     except Exception:
         logger.debug("Could not get remote origin URL from git config", exc_info=True)
     try:
-        res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=False)
+        res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=False, timeout=5)
         name = res.stdout.strip()
         if name:
             return f"@{name.replace(' ', '-').lower()}"
+    except subprocess.TimeoutExpired:
+        logger.debug("Timed out getting user.name from git config", exc_info=True)
     except Exception:
         logger.debug("Could not get user.name from git config", exc_info=True)
     try:
