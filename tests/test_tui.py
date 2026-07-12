@@ -1139,9 +1139,11 @@ async def test_tui_worker_cancellation(monkeypatch):
         )
         
         called_cancel = []
+        started = []
         def mock_generate_ai_summary(*args, **kwargs):
             from textual.worker import get_current_worker
             worker = get_current_worker()
+            started.append(True)
             for _ in range(50):
                 if worker.is_cancelled:
                     called_cancel.append(True)
@@ -1156,8 +1158,12 @@ async def test_tui_worker_cancellation(monkeypatch):
             
             # Start generation
             app.generate_single_session_story(app.sessions[0])
-            # Wait briefly for thread to enter the mock generate function
-            await asyncio.sleep(0.05)
+            # Wait for thread to enter the mock generate function
+            for _ in range(50):
+                if started:
+                    break
+                await asyncio.sleep(0.05)
+                
             # Immediately cancel the worker
             for worker in app.workers:
                 if worker.name == "generate_single_session_story":
