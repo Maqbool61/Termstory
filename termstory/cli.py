@@ -2,6 +2,7 @@ import os
 
 import typer
 from typing import Optional, List
+from datetime import datetime
 from dateutil import parser as date_parser
 
 # Supported tags for session categorization
@@ -12,7 +13,7 @@ from termstory.parser import parse_all_histories
 from termstory.session import create_sessions
 from termstory.project import detect_projects
 from termstory.database import Database
-from termstory.date_utils import get_current_time, get_today_range
+from termstory.date_utils import get_current_time, get_today_range, parse_date_range_helper
 from termstory.formatter import format_search_results, format_today_output, format_project_output, format_insights_output, format_stats_output, format_profile_output, format_necromancer_score, format_rage_quit_signatures
 import sqlite3
 
@@ -1424,7 +1425,7 @@ def version_callback(value: bool):
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    date: Optional[str] = typer.Option(None, "--date", help="Date override (YYYY-MM-DD) for commands"),
+    date: Optional[str] = typer.Option(None, "--date", help="Date override (e.g. today, yesterday, 7days, YYYY-MM-DD) for commands"),
     reset: bool = typer.Option(False, "--reset", help="Reset all TermStory state, configuration, and database"),
     version: Optional[bool] = typer.Option(
         None,
@@ -1441,8 +1442,9 @@ def main(
 
     if date:
         try:
-            date_parser.parse(date)
-            os.environ["TERMSTORY_DATE_OVERRIDE"] = date
+            start_ts, _ = parse_date_range_helper(date)
+            parsed_date = datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d")
+            os.environ["TERMSTORY_DATE_OVERRIDE"] = parsed_date
         except Exception:
             Console(stderr=True).print(f"[bold red]Error: Invalid date format '{date}'[/]")
             raise typer.Exit(code=1)
