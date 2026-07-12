@@ -287,13 +287,13 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
 
         conn.commit()
     except Exception as e:
-        logger.debug("Archive transaction failed", exc_info=True)
+        logger.exception("Archive transaction failed")
         _safe_rollback_and_reraise(conn, e)
     finally:
         try:
             conn.execute("DETACH DATABASE archive")
         except (sqlite3.Error, OSError) as e:
-            logger.debug("Failed to detach archive database: %s", e)
+            logger.warning("Failed to detach archive database: %s", e)
         conn.close()
 
     # Reclaim disk space via VACUUM
@@ -302,13 +302,13 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
         conn_main.execute("VACUUM;")
         conn_main.close()
     except (sqlite3.Error, OSError) as e:
-        logger.debug("Failed to VACUUM main database: %s", e)
+        logger.warning("Failed to VACUUM main database: %s", e)
 
     try:
         conn_arch = sqlite3.connect(archive_db_path)
         conn_arch.execute("VACUUM;")
         conn_arch.close()
     except (sqlite3.Error, OSError) as e:
-        logger.debug("Failed to VACUUM archive database: %s", e)
+        logger.warning("Failed to VACUUM archive database: %s", e)
 
     return stats
