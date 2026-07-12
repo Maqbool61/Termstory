@@ -24,6 +24,8 @@ def clean_command(cmd_str: str) -> Optional[str]:
     
     cleaned = re.sub(r'\\\s*\n', ' ', cleaned)
     cleaned = " ".join(cleaned.split())
+    # Strip a trailing shell line-continuation backslash when it has no continuation.
+    cleaned = re.sub(r'(?<!\\)\\\s*$', '', cleaned)
     if not cleaned:
         return None
         

@@ -6,6 +6,8 @@ def test_clean_command():
     assert clean_command("   git    status   ") == "git status"
     assert clean_command("echo \\\n  hello \\\n  world") == "echo hello world"
     assert clean_command("   ") is None
+    assert clean_command("docker ps\\") == "docker ps"
+    assert clean_command(r"echo \\\\") == r"echo \\\\"
 
 def test_parse_zsh_history_valid_file():
     # Use our fixture
