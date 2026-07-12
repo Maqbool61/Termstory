@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import calendar
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional, Any
@@ -17,6 +18,18 @@ from rich.text import Text
 from rich.markup import escape
 
 logger = logging.getLogger(__name__)
+
+ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+def display_len(s: str) -> int:
+    s_clean = ansi_escape.sub('', s)
+    length = 0
+    for char in s_clean:
+        if unicodedata.east_asian_width(char) in ('W', 'F'):
+            length += 2
+        else:
+            length += 1
+    return length
 
 DISPLAY_NAMES = {
     "git": "Git",
@@ -1048,19 +1061,7 @@ def boxify_terminal_wrapped(text: str) -> str:
     is_rpg = any("CHARACTER SHEET" in line.upper() or "TELEMETRY" in line.upper() or "[⚔️" in line or "[🎒" in line for line in cleaned_lines)
     width = 58
     
-    import unicodedata
-    import re
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    
-    def display_len(s: str) -> int:
-        s_clean = ansi_escape.sub('', s)
-        length = 0
-        for char in s_clean:
-            if unicodedata.east_asian_width(char) in ('W', 'F'):
-                length += 2
-            else:
-                length += 1
-        return length
+
 
     box_lines = []
     
@@ -1333,7 +1334,7 @@ def format_stats_output(db) -> str:
     sorted_projects = sorted(breakdown.items(), key=lambda x: x[1]["total_duration"], reverse=True)
     
     table = Table(box=None, show_header=True, padding=(0, 2))
-    table.add_column("Project", style="cyan", header_style="bold cyan", overflow="fold")
+    table.add_column("Project", style="cyan", header_style="bold cyan", no_wrap=True)
     table.add_column("Commands", justify="right", style="green")
     table.add_column("Duration", justify="right", style="green")
     table.add_column("Sessions", justify="right", style="green")
@@ -1396,35 +1397,46 @@ def format_stats_output(db) -> str:
     top_hours_str = ", ".join(top_hours_parts) if top_hours_parts else "N/A"
     
     from rich.console import Console
-    from rich.text import Text
-    _measure_console = Console()
+    console = Console()
     
-    def get_markup_width(s: str) -> int:
-        return _measure_console.measure(Text.from_markup(s)).maximum
+    def make_divider(width: int) -> str:
+        return "[dim]" + "─" * width + "[/]"
 
-    heatmap_width = max(30, get_markup_width(heatmap_str))
-    punch_card_width = max(32, get_markup_width(punch_card))
-    lang_width = max(get_markup_width(l) for l in lang_lines) if lang_lines else 21
-    
-    # Build complete report
+    title_heatmap = "[bold cyan]Activity Heatmap (Last 30 Days)[/]"
+    heatmap_content = f"  {heatmap_str}"
+    heatmap_width = Text.from_markup(heatmap_content).cell_len
+
+    title_peak = "[bold cyan]Peak Hours (Command Distribution)[/]"
+    peak_content = f"  {punch_card}"
+    peak_width = Text.from_markup(peak_content).cell_len
+
+    title_lang = "[bold cyan]Language Distribution[/]"
+    if lang_lines:
+        lang_width = max(Text.from_markup(line).cell_len for line in lang_lines)
+    else:
+        lang_width = len("  No languages detected.")
+
+    title_proj = "[bold cyan]Project Breakdown[/]"
+    proj_width = console.measure(table).maximum
+
     output_lines = [
         "📊 [bold]Deep History Statistics & Telemetry[/]",
         "",
-        "[bold cyan]Activity Heatmap (Last 30 Days)[/]",
-        f"[dim]{'─' * heatmap_width}[/]",
-        f"  {heatmap_str}",
+        title_heatmap,
+        make_divider(heatmap_width),
+        heatmap_content,
         "",
-        "[bold cyan]Peak Hours (Command Distribution)[/]",
-        f"[dim]{'─' * punch_card_width}[/]",
-        f"  {punch_card}",
+        title_peak,
+        make_divider(peak_width),
+        peak_content,
         f"  Top Active Hours: {top_hours_str}",
         "",
-        "[bold cyan]Language Distribution[/]",
-        f"[dim]{'─' * lang_width}[/]",
+        title_lang,
+        make_divider(lang_width),
         lang_output,
         "",
-        "[bold cyan]Project Breakdown[/]",
-        "[dim]─────────────────[/]",
+        title_proj,
+        make_divider(proj_width),
     ]
     
     project_table_str = render_to_string(table)
