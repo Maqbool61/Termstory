@@ -9,4 +9,4 @@
 
 - The install script checks for a Python 3 interpreter and uses `pip` to install the project.
 - The installer attempts a virtual environment installation first and falls back to a user installation if needed.
-- Scripts in `pocs/` are experimental,  throwaway scripts and are not intended as stable tooling.
+- Scripts in `pocs/` are experimental and are not intended as stable tooling; inspect them before running because some target local Termstory data rather than isolated fixtures.
