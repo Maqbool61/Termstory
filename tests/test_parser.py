@@ -9,6 +9,22 @@ def test_clean_command():
     assert clean_command("docker ps\\") == "docker ps"
     assert clean_command(r"echo \\\\") == r"echo \\\\"
 
+def test_clean_command_strips_only_unescaped_trailing_backslash():
+    """A single trailing backslash is a line-continuation marker and should be removed.
+
+    An escaped trailing backslash (two backslashes) is a literal backslash in the
+    shell command and must be preserved.
+    """
+    # Unescaped trailing backslash -> strip it (and any surrounding whitespace).
+    assert clean_command("docker ps\\") == "docker ps"
+    assert clean_command("echo \\") == "echo"
+    assert clean_command("echo \\") == "echo"  # whitespace before backslash is also removed
+    assert clean_command("docker ps\\   ") == "docker ps"
+
+    # Escaped trailing backslash -> preserve it.
+    assert clean_command(r"echo \\") == r"echo \\"
+    assert clean_command(r"echo \\  ") == r"echo \\"
+
 def test_parse_zsh_history_valid_file():
     # Use our fixture
     fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "sample_history.txt")
