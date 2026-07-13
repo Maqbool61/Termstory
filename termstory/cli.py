@@ -2,7 +2,7 @@ import os
 
 import typer
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 
 # Supported tags for session categorization

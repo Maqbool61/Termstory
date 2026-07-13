@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typer.testing import CliRunner
 from termstory.cli import app
 from termstory.database import Database
@@ -453,6 +453,10 @@ def test_global_date_accepts_natural_language(tmp_path, monkeypatch):
     result = runner.invoke(app, ["--date", "yesterday"])
 
     assert result.exit_code == 0
+    expected = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert os.environ.get("TERMSTORY_DATE_OVERRIDE") == expected, (
+    f"Expected override {expected!r}, got {os.environ.get('TERMSTORY_DATE_OVERRIDE')!r}"
+)
     # The CLI sets TERMSTORY_DATE_OVERRIDE directly, so clean it up
     # to avoid leaking state into later tests.
     os.environ.pop("TERMSTORY_DATE_OVERRIDE", None)
