@@ -7,12 +7,7 @@ from dateutil import parser as date_parser
 # Supported tags for session categorization
 TAGS = ["deploy", "debug", "setup", "test", "docs"]
 
-from termstory.config import (
-    get_config_value,
-    load_config,
-    get_history_files,
-    get_db_path,
-)
+from termstory.config import get_config_value, get_history_files, get_db_path
 from termstory.parser import parse_all_histories
 from termstory.session import create_sessions
 from termstory.project import detect_projects
@@ -102,6 +97,18 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
+def discover_project_paths():
+        import glob
+        paths = []
+        for root_dir in ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"]:
+            expanded = os.path.expanduser(root_dir)
+            if os.path.isdir(expanded):
+                for git_dir in glob.glob(os.path.join(expanded, "*", ".git")):
+                    paths.append(os.path.dirname(git_dir))
+                if root_dir != "~":
+                    for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
+                        paths.append(os.path.dirname(git_dir))
+        return sorted(set(paths))
 def run_ingestion(db: Database) -> None:
     """Helper to parse active history files and store them in the database"""
     history_files = get_history_files()
@@ -123,76 +130,61 @@ def run_ingestion(db: Database) -> None:
             "Run some commands in your terminal first, then re-run `termstory ui`.\n"
         )
         return
-    config = load_config()
+    commands = parse_all_histories(
+        history_files,
+        db=db,
+        project_paths=discover_project_paths()
+    )
 
-def discover_project_paths():
-    import glob
-
-    paths = []
-
-    project_roots = get_config_value(config, "project_roots") or [
-        "~/Projects",
-        "~/src",
-        "~/Developer",
-        "~/Code",
-        "~/Work",
-        "~",
-    ]
-
-    for root_dir in project_roots:
-        expanded = os.path.expanduser(root_dir)
-
-        if os.path.isdir(expanded):
-            for git_dir in glob.glob(os.path.join(expanded, "*", ".git")):
-                paths.append(os.path.dirname(git_dir))
-
-            if root_dir != "~":
-                for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
-                    paths.append(os.path.dirname(git_dir))
-
-    return sorted(set(paths))
-
-    commands = parse_all_histories(history_files, db=db, project_paths=discover_project_paths)
     if len(commands) == 0:
         Console(stderr=True).print(
             "\n[bold yellow]⚠️  Warning: Shell history parser returned 0 commands.[/bold yellow]\n"
             "Your history file might be empty, unreadable, or permission denied.\n"
             "If you are on macOS, please check and grant Full Disk Access to your Terminal app.\n"
         )
-        
+
     sessions = create_sessions(commands)
     projects = detect_projects(sessions)
     db.save_data(projects, sessions, commands)
-    
-    # Ingest commits for each project: dynamically adjust search window based on the oldest command parsed
+
+    # Ingest commits for each project
     from termstory.git_integration import get_project_commits
+
     if commands:
         oldest_ts = commands[0].timestamp
-        since_ts = min(oldest_ts - 24 * 3600, int(get_current_time().timestamp()) - 90 * 24 * 3600)
+        since_ts = min(
+            oldest_ts - 24 * 3600,
+            int(get_current_time().timestamp()) - 90 * 24 * 3600,
+        )
     else:
         since_ts = int(get_current_time().timestamp()) - 90 * 24 * 3600
-        
-    is_deep_history = since_ts < int(get_current_time().timestamp()) - 90 * 24 * 3600
+
+    is_deep_history = (
+        since_ts < int(get_current_time().timestamp()) - 90 * 24 * 3600
+    )
     git_timeout = 30 if is_deep_history else 10
-        
+
     for p in projects:
         if p.id is not None and p.path:
-            commits = get_project_commits(p.path, since_ts, timeout=git_timeout)
+            commits = get_project_commits(
+                p.path,
+                since_ts,
+                timeout=git_timeout,
+            )
             if commits:
                 db.save_commits(p.id, commits)
-                
+
     # Auto-tag sessions
     from termstory.tags import auto_tag_all_sessions
     auto_tag_all_sessions(db)
 
-    # Capture MCP snapshot of current workspace/IDE/terminal state
+    # Capture MCP snapshot
     from termstory.mcp_snapshot import capture_and_store_mcp_snapshot
     capture_and_store_mcp_snapshot(db)
 
-    # Start REM Sleep background context consolidation daemon
+    # Start REM Sleep daemon
     from termstory.reminder import start_sleep_daemon
     start_sleep_daemon(db.db_path)
-
 @app.command("search")
 def search_history(
     query: Optional[str] = typer.Argument(None, help="Search term/query across commits, commands, and project names"),
