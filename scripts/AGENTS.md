@@ -3,6 +3,7 @@
 ## Files
 
 - `install.sh` — One-line installer (`curl | bash`) that downloads the project source and installs it.
+- `uninstall.sh` — Uninstaller that removes TermStory-installed files and shell configuration entries.
 - `pocs/` — Proof-of-concept scripts used for experimentation. These are not part of the released package.
 
 ## Conventions
