@@ -105,6 +105,11 @@ def discover_project_paths():
         ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"],
     )
 
+    if isinstance(project_roots, str):
+        project_roots = [project_roots]
+    elif not isinstance(project_roots, list):
+        project_roots = []
+
     for root_dir in project_roots:
             expanded = os.path.expanduser(root_dir)
             if os.path.isdir(expanded):
