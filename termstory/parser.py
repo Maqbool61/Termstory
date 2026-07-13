@@ -31,16 +31,16 @@ def _quotes_balanced(s: str) -> bool:
     return single % 2 == 0 and double % 2 == 0
 
 def _strip_trailing_continuation(s: str) -> str:
-    """Strip a shell line-continuation marker from the end of a command.
+    r"""Strip a shell line-continuation marker from the end of a command.
 
     In shell, a trailing run of N backslashes behaves as:
-      - N even  -> all are escaped literals, keep them (e.g. ``ls C:\\`` -> ``ls C:\``)
+      - N even  -> all are escaped literals, keep them (e.g. ``ls C:\`` -> ``ls C:\``)
       - N odd   -> the final backslash is a line continuation, drop exactly one
                    (e.g. ``docker ps\`` -> ``docker ps``)
 
-    Only a backslash run that sits directly at the end of the string (no
-    separating whitespace) is treated as a continuation. A backslash preceded
-    by whitespace (e.g. ``echo \ ``) is left untouched.
+    A backslash run preceded by whitespace (e.g. ``echo \ ``) is treated as a
+    continuation. A run preceded by a path/quote character (e.g. ``ls C:\``)
+    is kept as a literal.
     """
     n = len(s)
     k = 0
