@@ -7,7 +7,7 @@ from dateutil import parser as date_parser
 # Supported tags for session categorization
 TAGS = ["deploy", "debug", "setup", "test", "docs"]
 
-from termstory.config import get_config_value, get_history_files, get_db_path
+from termstory.config import get_config_value, get_history_files, get_db_path, load_config
 from termstory.parser import parse_all_histories
 from termstory.session import create_sessions
 from termstory.project import detect_projects
@@ -98,9 +98,14 @@ app = typer.Typer(
 )
 
 def discover_project_paths():
-        import glob
-        paths = []
-        for root_dir in ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"]:
+    import glob
+    paths = []
+    project_roots = load_config().get(
+        "project_roots",
+        ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"],
+    )
+
+    for root_dir in project_roots:
             expanded = os.path.expanduser(root_dir)
             if os.path.isdir(expanded):
                 for git_dir in glob.glob(os.path.join(expanded, "*", ".git")):
@@ -108,7 +113,7 @@ def discover_project_paths():
                 if root_dir != "~":
                     for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
                         paths.append(os.path.dirname(git_dir))
-        return sorted(set(paths))
+    return sorted(set(paths))
 def run_ingestion(db: Database) -> None:
     """Helper to parse active history files and store them in the database"""
     history_files = get_history_files()
