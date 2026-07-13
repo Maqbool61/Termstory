@@ -30,6 +30,36 @@ def _quotes_balanced(s: str) -> bool:
         i += 1
     return single % 2 == 0 and double % 2 == 0
 
+def _strip_trailing_continuation(s: str) -> str:
+    """Strip a shell line-continuation marker from the end of a command.
+
+    In shell, a trailing run of N backslashes behaves as:
+      - N even  -> all are escaped literals, keep them (e.g. ``ls C:\\`` -> ``ls C:\``)
+      - N odd   -> the final backslash is a line continuation, drop exactly one
+                   (e.g. ``docker ps\`` -> ``docker ps``)
+
+    Only a backslash run that sits directly at the end of the string (no
+    separating whitespace) is treated as a continuation. A backslash preceded
+    by whitespace (e.g. ``echo \ ``) is left untouched.
+    """
+    n = len(s)
+    k = 0
+    while k < n and s[n - 1 - k] == "\\":
+        k += 1
+    if k == 0:
+        return s
+    # If the backslash run is preceded by a path/quote character, it is almost
+    # certainly a literal (e.g. `ls C:\`, `cd "foo\`) rather than a continuation
+    # marker, so keep it. Otherwise treat an odd-length run as a line continuation
+    # and drop exactly one backslash.
+    if k < n and s[n - 1 - k] in (":", '"', "'", "/", "\\"):
+        return s
+    if k % 2 == 1:
+        # Drop only the continuation marker (and any trailing whitespace that
+        # preceded it), keep the literal pairs.
+        return s[: n - 1].rstrip()
+    return s
+
 def clean_command(cmd_str: str) -> Optional[str]:
     """Clean the command string: strip whitespace and join multiline commands with spaces"""
     # Strip ansi escape codes
@@ -43,9 +73,10 @@ def clean_command(cmd_str: str) -> Optional[str]:
     # Strip a trailing shell line-continuation backslash only when quotes are
     # balanced. If a command reaches this point with unbalanced quotes, a
     # remaining terminal backslash is part of a literal argument (e.g. echo "C:\)
-    # and must be preserved. Escaped backslashes (\\) are always preserved.
+    # and must be preserved. See _strip_trailing_continuation for the even/odd
+    # backslash rule that keeps literal backslashes (ls C:\) intact.
     if _quotes_balanced(cleaned):
-        cleaned = re.sub(r"(?<!\\)\s*\\\s*$", "", cleaned)
+        cleaned = _strip_trailing_continuation(cleaned)
     if not cleaned:
         return None
         

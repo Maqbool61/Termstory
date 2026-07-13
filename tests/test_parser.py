@@ -25,6 +25,10 @@ def test_clean_command_strips_only_unescaped_trailing_backslash():
     assert clean_command(r"echo \\") == r"echo \\"
     assert clean_command(r"echo \\  ") == r"echo \\"
 
+    # Even-length trailing backslash run is literal -> keep (Greptile P1b).
+    assert clean_command("ls C:\\") == "ls C:\\"
+    assert clean_command("ls C:\\\\") == "ls C:\\\\"
+
     # Unbalanced quotes -> a trailing backslash is a literal, keep it (Greptile P1).
     assert clean_command('echo "C:\\') == 'echo "C:\\'
     assert clean_command("git commit 'msg\\") == "git commit 'msg\\"
