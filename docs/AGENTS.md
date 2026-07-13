@@ -6,7 +6,7 @@
 - `architecture.md` — Project architecture, ingestion pipeline, timestamp detection, and Git correlation.
 - `architecture-decisions.md` — Architecture decisions and design rationale.
 - `cli-reference.md` — Complete CLI command reference and usage.
-- `configuration.md` — Configuration file format, provider setup, and onboarding.
+- `configuration.md` — Configuration file format and provider setup.
 - `database-schema.md` — SQLite WAL schema, thread safety, and concurrency.
 - `privacy.md` — Sanitizer rules, credential redaction, and PII protection.
 - `troubleshooting.md` — Troubleshooting guide and common issues.
