@@ -25,6 +25,10 @@ def test_clean_command_strips_only_unescaped_trailing_backslash():
     assert clean_command(r"echo \\") == r"echo \\"
     assert clean_command(r"echo \\  ") == r"echo \\"
 
+    # Unbalanced quotes -> a trailing backslash is a literal, keep it (Greptile P1).
+    assert clean_command('echo "C:\\') == 'echo "C:\\'
+    assert clean_command("git commit 'msg\\") == "git commit 'msg\\"
+
 def test_parse_zsh_history_valid_file():
     # Use our fixture
     fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "sample_history.txt")

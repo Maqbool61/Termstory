@@ -14,6 +14,22 @@ try:
 except re.error:
     ANSI_ESCAPE_PATTERN = None
 
+def _quotes_balanced(s: str) -> bool:
+    """Return True if single and double quotes are evenly paired (escapes ignored)."""
+    single = double = 0
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == '\\' and i + 1 < len(s):
+            i += 2  # skip the escaped character entirely
+            continue
+        if c == "'":
+            single += 1
+        elif c == '"':
+            double += 1
+        i += 1
+    return single % 2 == 0 and double % 2 == 0
+
 def clean_command(cmd_str: str) -> Optional[str]:
     """Clean the command string: strip whitespace and join multiline commands with spaces"""
     # Strip ansi escape codes
@@ -24,9 +40,12 @@ def clean_command(cmd_str: str) -> Optional[str]:
     
     cleaned = re.sub(r'\\\s*\n', ' ', cleaned)
     cleaned = " ".join(cleaned.split())
-    # Strip a trailing shell line-continuation backslash (and any surrounding
-    # whitespace) when it is not escaped. Escaped backslashes (\\) are preserved.
-    cleaned = re.sub(r"(?<!\\)\s*\\\s*$", "", cleaned)
+    # Strip a trailing shell line-continuation backslash only when quotes are
+    # balanced. If a command reaches this point with unbalanced quotes, a
+    # remaining terminal backslash is part of a literal argument (e.g. echo "C:\)
+    # and must be preserved. Escaped backslashes (\\) are always preserved.
+    if _quotes_balanced(cleaned):
+        cleaned = re.sub(r"(?<!\\)\s*\\\s*$", "", cleaned)
     if not cleaned:
         return None
         
